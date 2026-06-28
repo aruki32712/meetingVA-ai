@@ -1,1 +1,1 @@
-# meetingvault-ai
+# meetingVA-ai
