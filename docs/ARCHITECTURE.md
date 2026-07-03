@@ -14,7 +14,7 @@ Key responsibilities:
 
 - Route-level app shell and authenticated layouts
 - Supabase Auth session handling
-- Dashboard and meeting detail pages
+- Dashboard navigation, project progress tracking, and meeting detail pages
 - Browser audio recording and upload controls
 - Progress tracker for processing jobs
 - Transcript, speaker, summary, action item, decision, and question review UI
@@ -54,6 +54,14 @@ core meeting data model:
 Row-level security should enforce owner-scoped access through Supabase Auth.
 Application tables should keep source references wherever AI-generated records
 come from transcript segments.
+
+The dashboard progress tracker stores user-owned project planning state in:
+
+- `project_progress_phases`
+- `project_progress_checklist_items`
+
+These tables are separate from future meeting processing progress so roadmap
+tracking does not depend on recording, upload, or AI job infrastructure.
 
 ## Storage Architecture
 

@@ -106,8 +106,8 @@ docs/                         Project roadmap, architecture, and planning docs
 - [x] Project Scaffold
 - [x] Supabase Configuration
 - [x] User Authentication
-- [ ] Dashboard
-- [ ] Progress Tracker
+- [x] Dashboard
+- [x] Progress Tracker
 - [ ] Browser Audio Recording
 - [ ] Audio Upload
 - [ ] Meeting Storage

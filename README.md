@@ -3,7 +3,7 @@
 Initial full-stack scaffold for MeetingVA AI, a meeting capture and intelligence
 application. This repository is intentionally thin right now: it provides a
 working local architecture, health checks, environment templates, Docker setup,
-and the first Supabase PostgreSQL schema migration.
+dashboard progress tracking, and Supabase PostgreSQL migrations.
 
 Project planning docs:
 
@@ -79,6 +79,7 @@ Authentication routes:
 - Login: `http://localhost:3000/login`
 - Signup: `http://localhost:3000/signup`
 - Protected dashboard: `http://localhost:3000/dashboard`
+- Progress tracker: `http://localhost:3000/dashboard/progress`
 
 Supabase Auth should allow `http://localhost:3000` as a local site/redirect URL.
 
@@ -110,16 +111,17 @@ On Windows PowerShell, activate the backend environment with:
 
 ## Database Migrations
 
-The first schema migration lives at:
+Schema migrations live in:
 
 ```text
-scripts/supabase/migrations/0001_initial_schema.sql
+scripts/supabase/migrations/
 ```
 
-It defines the core production tables for meetings, participants, transcript
-segments, action items, decisions, questions, tags, attachments, and meeting-tag
-relationships. It also enables row-level security and basic owner-scoped
-policies using Supabase Auth.
+The initial migration defines the core production tables for meetings,
+participants, transcript segments, action items, decisions, questions, tags,
+attachments, and meeting-tag relationships. The progress tracker migration adds
+owner-scoped project phases and checklist items. Both migrations enable
+row-level security with Supabase Auth policies.
 
 Apply it with the Supabase CLI from a linked project:
 
