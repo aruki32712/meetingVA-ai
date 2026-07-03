@@ -5,6 +5,8 @@ application. This repository is intentionally thin right now: it provides a
 working local architecture, health checks, environment templates, Docker setup,
 and the first Supabase PostgreSQL schema migration.
 
+The project source of truth is [doc/MASTER_PLAN.md](doc/MASTER_PLAN.md).
+
 ## Stack
 
 - Frontend: Next.js 15 App Router, React, TypeScript, Tailwind CSS
