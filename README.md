@@ -74,6 +74,14 @@ Health checks:
 - Frontend: `http://localhost:3000/api/health`
 - Backend: `http://localhost:8000/health`
 
+Authentication routes:
+
+- Login: `http://localhost:3000/login`
+- Signup: `http://localhost:3000/signup`
+- Protected dashboard: `http://localhost:3000/dashboard`
+
+Supabase Auth should allow `http://localhost:3000` as a local site/redirect URL.
+
 ## Run Without Docker
 
 Frontend:
