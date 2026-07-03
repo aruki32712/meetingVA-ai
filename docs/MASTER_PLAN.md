@@ -1,111 +1,132 @@
 # MeetingVA AI Master Plan
 
-This document is the single source of truth for MeetingVA AI product direction,
-architecture, development phases, milestones, and future enhancements.
+This document is the permanent project roadmap for MeetingVA AI. It should be
+updated whenever the product direction, architecture, scope, or development
+status changes.
 
-## Vision
+## Project Vision
 
-MeetingVA AI is a meeting intelligence workspace that helps people capture,
-organize, understand, and act on conversations. The product turns live or
-uploaded meeting audio into durable meeting records with transcripts, summaries,
-decisions, questions, action items, searchable history, and exports.
+MeetingVA AI helps people turn meetings into organized, searchable, actionable
+records. The product captures or accepts meeting audio, produces transcripts,
+identifies speakers, extracts summaries and decisions, tracks questions and
+action items, and preserves the source material so users can review and trust
+the final meeting record.
 
-The goal is to reduce the manual work that follows every meeting while keeping
-the source conversation auditable. Users should be able to record or upload a
-meeting, let AI extract the important structure, review and correct the output,
-and return later to find exactly what was discussed, decided, assigned, or left
-unanswered.
+## Product Goals
 
-## Architecture
+- Make meeting capture simple from the browser.
+- Store every meeting with reliable ownership, metadata, transcript segments,
+  attachments, and extracted intelligence.
+- Give users a clear progress tracker while recordings, uploads, and AI jobs are
+  being processed.
+- Let users review, edit, search, and export meeting records.
+- Build a foundation that can grow into team workspaces, mobile apps, calendar
+  integrations, and AI chat over meeting history.
 
-### Frontend
+## Technology Stack
 
-The frontend is a Next.js 15 App Router application built with React,
-TypeScript, and Tailwind CSS. It owns the browser experience for authentication,
-dashboard navigation, recording and upload workflows, meeting detail views,
-transcript editing, progress tracking, search, exports, and AI chat surfaces.
+- Frontend: Next.js 15 App Router, React, TypeScript, Tailwind CSS
+- Backend: FastAPI, Python 3.12
+- Authentication: Supabase Auth
+- Database: Supabase PostgreSQL
+- Storage: Supabase Storage
+- AI: transcription, speaker identification, summarization, extraction, search,
+  and chat services orchestrated through the backend
+- Local runtime: Docker and docker-compose
+- Package/runtime tooling: pnpm for the frontend, pip for the backend
 
-### Backend
+## Repository Structure
 
-The backend is a FastAPI service running on Python 3.12. It provides API
-endpoints for server-side workflows that should not live directly in the browser:
-AI orchestration, transcription job management, file-processing callbacks,
-export generation, integration webhooks, and operational health checks.
+```text
+frontend/                     Next.js application
+backend/                      FastAPI application
+docker/                       Dockerfiles and docker-compose configuration
+scripts/supabase/migrations/  Supabase database migrations
+shared/                       Shared API notes and contracts
+docs/                         Product and engineering documentation
+```
 
-### Database
+## Database Overview
 
-Supabase PostgreSQL is the system of record. The initial schema includes
-meetings, participants, transcript segments, action items, decisions, questions,
-tags, meeting-tag relationships, and attachments. Row-level security policies
-scope records to the authenticated meeting owner.
+Supabase PostgreSQL is the system of record. The initial schema includes:
 
-### Storage
+- `meetings`
+- `participants`
+- `transcript_segments`
+- `action_items`
+- `decisions`
+- `questions`
+- `tags`
+- `meeting_tags`
+- `attachments`
 
-Supabase Storage stores meeting-related files such as uploaded audio, generated
-transcripts, exported documents, images, and other attachments. Database
-attachment records track bucket paths, content types, file sizes, ownership, and
-meeting associations.
+Row-level security should keep user-owned records isolated through Supabase Auth
+identity. Meeting attachments are tracked in PostgreSQL while their files live
+in Supabase Storage.
 
-### Authentication
+## API Overview
 
-Supabase Auth provides user identity, sessions, and token-based access from the
-frontend. Backend services validate Supabase-issued credentials before accessing
-protected resources or running user-scoped workflows.
+The frontend talks to the FastAPI backend for server-side workflows and to
+Supabase for authenticated client-side data access where appropriate.
 
-### AI
+Current scaffolded endpoints:
 
-AI services will power transcription, speaker detection, summarization, action
-item extraction, decision extraction, question detection, semantic search, and
-meeting chat. AI outputs should be stored with links back to source transcript
-segments wherever possible so users can review and correct the record.
+- Frontend health: `GET /api/health`
+- Backend health: `GET /health`
 
-### Deployment
+Future API areas:
 
-The local development architecture runs with Docker and docker-compose. The
-production architecture should support independent deployment of the frontend
-and backend, managed Supabase services, environment-specific configuration,
-health checks, logging, and future background workers for long-running AI and
-export tasks.
+- Authentication/session validation
+- Meeting creation and updates
+- Recording and upload coordination
+- AI processing job lifecycle
+- Transcript, speaker, summary, action item, decision, and question APIs
+- Search and export APIs
+- Team and integration APIs
 
-### Integrations
+## AI Processing Pipeline
 
-Initial integrations focus on Supabase Auth, PostgreSQL, and Storage. Future
-integrations may include calendar providers, conferencing platforms, cloud file
-storage, notification tools, document export services, and payment or team
-workspace infrastructure.
+1. User records audio in the browser or uploads an existing audio file.
+2. The frontend stores metadata and sends the file through the configured upload
+   path.
+3. Supabase Storage keeps the source audio and related attachments.
+4. The backend creates or receives a processing job.
+5. AI transcription produces timestamped transcript segments.
+6. Speaker identification links segments to participant or speaker records.
+7. AI extraction generates summaries, action items, decisions, and questions.
+8. Results are stored in Supabase PostgreSQL with references back to source
+   transcript segments.
+9. The frontend shows processing progress and lets users review, edit, search,
+   export, and chat with meeting records.
 
 ## Development Phases
 
-- [x] Project Scaffold - completed
-- [ ] Supabase Configuration - not started
-- [ ] Authentication - not started
-- [ ] Dashboard - not started
-- [ ] Progress Tracker - not started
-- [ ] Browser Audio Recording - not started
-- [ ] Audio Upload - not started
-- [ ] Meeting Storage - not started
-- [ ] AI Transcription - not started
-- [ ] Speaker Detection - not started
-- [ ] Meeting Summary - not started
-- [ ] Action Items - not started
-- [ ] Decisions - not started
-- [ ] Questions - not started
-- [ ] Meeting Detail Page - not started
-- [ ] Transcript Editor - not started
-- [ ] Speaker Editor - not started
-- [ ] Search - not started
-- [ ] Calendar - not started
-- [ ] Export PDF - not started
-- [ ] Export DOCX - not started
-- [ ] AI Chat - not started
-- [ ] Mobile Support - not started
-- [ ] Deployment - not started
+✅ Project Scaffold
+⬜ Supabase Project Setup
+⬜ Authentication
+⬜ Dashboard
+⬜ Progress Tracker
+⬜ Browser Audio Recording
+⬜ Audio Upload
+⬜ Meeting Storage
+⬜ AI Transcription
+⬜ Speaker Identification
+⬜ Meeting Summary
+⬜ Action Items
+⬜ Decisions
+⬜ Questions
+⬜ Meeting Detail Page
+⬜ Transcript Editor
+⬜ Speaker Editor
+⬜ Search
+⬜ Export
+⬜ Team Features
+⬜ Mobile Apps
+⬜ Deployment
 
-## Milestones
+## MVP Scope
 
-### MVP
-
-- Supabase configuration
+- Supabase project setup
 - Authentication
 - Dashboard
 - Progress tracker
@@ -114,40 +135,35 @@ workspace infrastructure.
 - Meeting storage
 - AI transcription
 - Meeting detail page
-- Basic meeting summary
+- Meeting summary
 - Action items
 - Decisions
 - Questions
 
-### Version 1.1
+## Version 1.1
 
-- Speaker detection
+- Speaker identification
 - Transcript editor
 - Speaker editor
 - Search
-- Export PDF
-- Export DOCX
+- Export
+- Improved meeting detail review workflows
 
-### Version 2.0
+## Version 2.0
 
+- Team features
+- AI chat over meetings
 - Calendar integration
-- AI chat
-- Improved semantic search
-- Team-ready sharing model
-- Production deployment hardening
-
-### Version 3.0
-
-- Mobile support
-- Advanced integrations
-- Multi-workspace support
-- Automation workflows
-- Enterprise administration features
+- Shared meeting workspaces
+- More advanced search and filtering
 
 ## Future Ideas
 
-Future enhancements will be evaluated after the MVP proves the core meeting
-capture, transcription, review, and retrieval workflow. Candidates include
-calendar-based meeting preparation, agenda generation, recurring meeting memory,
-CRM/task-manager integrations, custom AI prompts, collaborative review, meeting
-analytics, offline mobile capture, and organization-level knowledge search.
+- Mobile apps
+- Offline recording support
+- Conferencing platform integrations
+- CRM and task manager integrations
+- Recurring meeting memory
+- Custom AI prompts
+- Organization-wide knowledge search
+- Analytics for decisions, action items, and meeting load
