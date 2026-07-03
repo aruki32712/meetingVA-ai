@@ -77,8 +77,10 @@ Expected stored assets:
 - Exported DOCX documents
 - Future images or integration attachments
 
-The `meeting-attachments` bucket is private by default. Access should be
-mediated by Supabase Auth, row-level security, and signed URLs where needed.
+The `meeting-audio` bucket stores browser recordings and is private by default.
+The `meeting-attachments` bucket stores supporting meeting files and generated
+artifacts. Access should be mediated by Supabase Auth, row-level security, and
+signed URLs where needed.
 
 ## Authentication Flow
 

@@ -9,9 +9,132 @@ type ProjectProgressStatus =
   | "blocked"
   | "complete";
 
+type MeetingStatus =
+  | "draft"
+  | "recording"
+  | "processing"
+  | "completed"
+  | "archived";
+
+type MeetingProcessingStatus =
+  | "draft"
+  | "uploaded"
+  | "processing"
+  | "completed"
+  | "failed";
+
+type AttachmentKind = "audio" | "transcript" | "document" | "image" | "other";
+
 type Database = {
   public: {
     Tables: {
+      meetings: {
+        Row: {
+          id: string;
+          owner_id: string;
+          user_id: string;
+          title: string;
+          description: string | null;
+          status: MeetingStatus;
+          meeting_date: string;
+          scheduled_at: string | null;
+          started_at: string | null;
+          ended_at: string | null;
+          source: string | null;
+          audio_storage_path: string | null;
+          duration_seconds: number | null;
+          processing_status: MeetingProcessingStatus;
+          tags: string[];
+          created_at: string;
+          updated_at: string;
+        };
+        Insert: {
+          id?: string;
+          owner_id: string;
+          user_id: string;
+          title: string;
+          description?: string | null;
+          status?: MeetingStatus;
+          meeting_date: string;
+          scheduled_at?: string | null;
+          started_at?: string | null;
+          ended_at?: string | null;
+          source?: string | null;
+          audio_storage_path?: string | null;
+          duration_seconds?: number | null;
+          processing_status?: MeetingProcessingStatus;
+          tags?: string[];
+          created_at?: string;
+          updated_at?: string;
+        };
+        Update: {
+          id?: string;
+          owner_id?: string;
+          user_id?: string;
+          title?: string;
+          description?: string | null;
+          status?: MeetingStatus;
+          meeting_date?: string;
+          scheduled_at?: string | null;
+          started_at?: string | null;
+          ended_at?: string | null;
+          source?: string | null;
+          audio_storage_path?: string | null;
+          duration_seconds?: number | null;
+          processing_status?: MeetingProcessingStatus;
+          tags?: string[];
+          created_at?: string;
+          updated_at?: string;
+        };
+        Relationships: [];
+      };
+      attachments: {
+        Row: {
+          id: string;
+          meeting_id: string;
+          uploaded_by: string | null;
+          kind: AttachmentKind;
+          file_name: string;
+          storage_bucket: string;
+          storage_path: string;
+          content_type: string | null;
+          size_bytes: number | null;
+          created_at: string;
+        };
+        Insert: {
+          id?: string;
+          meeting_id: string;
+          uploaded_by?: string | null;
+          kind?: AttachmentKind;
+          file_name: string;
+          storage_bucket?: string;
+          storage_path: string;
+          content_type?: string | null;
+          size_bytes?: number | null;
+          created_at?: string;
+        };
+        Update: {
+          id?: string;
+          meeting_id?: string;
+          uploaded_by?: string | null;
+          kind?: AttachmentKind;
+          file_name?: string;
+          storage_bucket?: string;
+          storage_path?: string;
+          content_type?: string | null;
+          size_bytes?: number | null;
+          created_at?: string;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "attachments_meeting_id_fkey";
+            columns: ["meeting_id"];
+            isOneToOne: false;
+            referencedRelation: "meetings";
+            referencedColumns: ["id"];
+          }
+        ];
+      };
       project_progress_phases: {
         Row: {
           id: string;
@@ -87,6 +210,9 @@ type Database = {
     Views: Record<string, never>;
     Functions: Record<string, never>;
     Enums: {
+      attachment_kind: AttachmentKind;
+      meeting_processing_status: MeetingProcessingStatus;
+      meeting_status: MeetingStatus;
       project_progress_status: ProjectProgressStatus;
     };
     CompositeTypes: Record<string, never>;

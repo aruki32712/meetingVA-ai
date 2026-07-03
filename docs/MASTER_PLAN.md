@@ -108,9 +108,9 @@ docs/                         Project roadmap, architecture, and planning docs
 - [x] User Authentication
 - [x] Dashboard
 - [x] Progress Tracker
-- [ ] Browser Audio Recording
-- [ ] Audio Upload
-- [ ] Meeting Storage
+- [x] Browser Audio Recording
+- [x] Audio Upload
+- [x] Meeting Storage
 - [ ] AI Transcription
 - [ ] Speaker Identification
 - [ ] Meeting Summary

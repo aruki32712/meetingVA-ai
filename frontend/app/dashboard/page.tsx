@@ -15,9 +15,9 @@ export default function DashboardPage() {
         </p>
         <Link
           className="mt-5 inline-flex rounded-md bg-ink px-4 py-2 text-sm font-medium text-white transition hover:bg-slate-700"
-          href="/dashboard/progress"
+          href="/dashboard/meetings/new"
         >
-          Open progress tracker
+          Capture a meeting
         </Link>
       </section>
 
@@ -25,9 +25,15 @@ export default function DashboardPage() {
         <div className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
           <h3 className="text-base font-semibold text-ink">Meetings</h3>
           <p className="mt-2 text-sm leading-6 text-slate-600">
-            Recording, upload, and meeting review workflows are intentionally
-            waiting for later roadmap phases.
+            Record browser audio, upload it to private Supabase Storage, and
+            store meeting metadata for review.
           </p>
+          <Link
+            className="mt-3 inline-flex text-sm font-medium text-signal hover:text-ink"
+            href="/dashboard/meetings"
+          >
+            View meetings
+          </Link>
         </div>
         <div className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
           <h3 className="text-base font-semibold text-ink">Current focus</h3>

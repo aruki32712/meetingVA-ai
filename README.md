@@ -79,6 +79,8 @@ Authentication routes:
 - Login: `http://localhost:3000/login`
 - Signup: `http://localhost:3000/signup`
 - Protected dashboard: `http://localhost:3000/dashboard`
+- Meetings: `http://localhost:3000/dashboard/meetings`
+- New meeting capture: `http://localhost:3000/dashboard/meetings/new`
 - Progress tracker: `http://localhost:3000/dashboard/progress`
 
 Supabase Auth should allow `http://localhost:3000` as a local site/redirect URL.
@@ -120,8 +122,10 @@ scripts/supabase/migrations/
 The initial migration defines the core production tables for meetings,
 participants, transcript segments, action items, decisions, questions, tags,
 attachments, and meeting-tag relationships. The progress tracker migration adds
-owner-scoped project phases and checklist items. Both migrations enable
-row-level security with Supabase Auth policies.
+owner-scoped project phases and checklist items. The meeting capture migration
+adds browser-recording metadata fields and creates the private `meeting-audio`
+Storage bucket. All application migrations enable row-level security with
+Supabase Auth policies.
 
 Apply it with the Supabase CLI from a linked project:
 

@@ -9,6 +9,7 @@ import { LogoutButton } from "./logout-button";
 
 const navigationItems = [
   { href: "/dashboard", label: "Overview" },
+  { href: "/dashboard/meetings", label: "Meetings" },
   { href: "/dashboard/progress", label: "Progress" }
 ];
 
