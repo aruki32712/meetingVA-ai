@@ -9,6 +9,7 @@ Project planning docs:
 
 - [Master plan](docs/MASTER_PLAN.md)
 - [Architecture](docs/ARCHITECTURE.md)
+- [Supabase setup](docs/SUPABASE_SETUP.md)
 - [GitHub issues](docs/GITHUB_ISSUES.md)
 
 ## Stack
@@ -48,6 +49,19 @@ cp backend/.env.example backend/.env
 Fill in the Supabase values from your project dashboard. For local Docker
 development, the backend URL defaults to `http://localhost:8000` and the
 frontend runs on `http://localhost:3000`.
+
+Required Supabase values:
+
+- `NEXT_PUBLIC_SUPABASE_URL`
+- `NEXT_PUBLIC_SUPABASE_ANON_KEY`
+- `SUPABASE_URL`
+- `SUPABASE_ANON_KEY`
+- `SUPABASE_SERVICE_ROLE_KEY`
+- `SUPABASE_DATABASE_URL`
+
+See [docs/SUPABASE_SETUP.md](docs/SUPABASE_SETUP.md) for project creation,
+API key lookup, database URL setup, migrations, storage buckets,
+authentication, and troubleshooting.
 
 ## Run With Docker
 
@@ -106,6 +120,8 @@ supabase db push --include-all
 ```
 
 Or paste the migration into the Supabase SQL editor for a first bootstrap.
+The migration creates the private `meeting-attachments` Storage bucket if it
+does not already exist.
 
 ## Available Checks
 
