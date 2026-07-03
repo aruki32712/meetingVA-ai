@@ -5,7 +5,11 @@ application. This repository is intentionally thin right now: it provides a
 working local architecture, health checks, environment templates, Docker setup,
 and the first Supabase PostgreSQL schema migration.
 
-The project source of truth is [docs/MASTER_PLAN.md](docs/MASTER_PLAN.md).
+Project planning docs:
+
+- [Master plan](docs/MASTER_PLAN.md)
+- [Architecture](docs/ARCHITECTURE.md)
+- [GitHub issues](docs/GITHUB_ISSUES.md)
 
 ## Stack
 
