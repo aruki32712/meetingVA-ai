@@ -9,7 +9,8 @@ dependencies = [
   "pydantic-settings==2.7.1",
   "python-dotenv==1.0.1",
   "httpx==0.27.2",
-  "supabase==2.10.0"
+  "supabase==2.10.0",
+  "celery[redis]==5.4.0"
 ]
 
 [tool.pytest.ini_options]

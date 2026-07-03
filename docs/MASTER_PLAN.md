@@ -40,6 +40,7 @@ find the supporting evidence.
 - Storage: Supabase Storage
 - AI processing: backend-orchestrated transcription, speaker identification,
   summarization, extraction, search, and chat services
+- Background jobs: Redis and Celery for long-running AI work
 - Local development: Docker and docker-compose
 - Frontend package manager: pnpm
 - Backend package management: pip and `requirements.txt`
@@ -66,6 +67,7 @@ docs/                         Project roadmap, architecture, and planning docs
 - Meeting storage
 - AI transcription
 - Multilingual transcription with optional English transcript generation
+- Background AI job queue
 - Meeting detail page
 - Meeting summary
 - Action items
@@ -117,6 +119,7 @@ docs/                         Project roadmap, architecture, and planning docs
 - [x] Meeting Storage
 - [x] AI Transcription
 - [x] Multilingual Transcription
+- [x] Background AI Job Queue
 - [x] Meeting Summary
 - [x] Action Items
 - [x] Decisions

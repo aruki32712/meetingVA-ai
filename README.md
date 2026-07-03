@@ -4,8 +4,8 @@ Initial full-stack scaffold for MeetingVA AI, a meeting capture and intelligence
 application. This repository is intentionally thin right now: it provides a
 working local architecture, health checks, environment templates, Docker setup,
 dashboard progress tracking, meeting capture, AI transcription, speaker
-management, multilingual transcription metadata, AI meeting intelligence, and
-Supabase PostgreSQL migrations.
+management, multilingual transcription metadata, queued AI meeting
+intelligence, and Supabase PostgreSQL migrations.
 
 Project planning docs:
 
@@ -18,6 +18,7 @@ Project planning docs:
 
 - Frontend: Next.js 15 App Router, React, TypeScript, Tailwind CSS
 - Backend: FastAPI on Python 3.12
+- Background jobs: Celery with Redis broker/result backend
 - Data/auth/storage: Supabase Auth, Supabase PostgreSQL, Supabase Storage
 - Local runtime: Docker and docker-compose
 
@@ -67,6 +68,12 @@ Required AI values:
 - `OPENAI_TRANSCRIPTION_MODEL` defaults to `whisper-1`
 - `OPENAI_ANALYSIS_MODEL` defaults to `gpt-4o-mini`
 
+Required job queue values:
+
+- `REDIS_URL` defaults to `redis://redis:6379/0` in Docker
+- `CELERY_BROKER_URL` defaults to `redis://redis:6379/0`
+- `CELERY_RESULT_BACKEND` defaults to `redis://redis:6379/1`
+
 See [docs/SUPABASE_SETUP.md](docs/SUPABASE_SETUP.md) for project creation,
 API key lookup, database URL setup, migrations, storage buckets,
 authentication, and troubleshooting.
@@ -76,6 +83,10 @@ authentication, and troubleshooting.
 ```bash
 docker compose -f docker/docker-compose.yml up --build
 ```
+
+This starts four services: Next.js frontend, FastAPI backend, Redis, and a
+Celery worker. The backend enqueues long-running AI jobs; the worker performs
+OpenAI transcription, translation, and analysis.
 
 Health checks:
 
@@ -94,18 +105,21 @@ Authentication routes:
 After a meeting recording is uploaded, open its meeting detail page and use
 Generate Transcript. Optionally enable English translation for non-English
 audio. The frontend sends the Supabase access token and translation preference
-to the backend, which verifies meeting ownership, downloads the private audio
-object from Supabase Storage, sends it to OpenAI transcription with language
-auto-detection, stores timestamped rows in `transcript_segments`, creates
-editable speaker rows in `participants`, links segments through
-`participant_id`, records detected/transcript/translation language metadata on
-`meetings`, and updates `meetings.processing_status`.
+to the backend, which verifies meeting ownership, sets
+`meetings.processing_status` to `transcribing`, enqueues a Celery job, and
+returns a `job_id`. The frontend polls job status without freezing the page.
+The Celery worker downloads the private audio object from Supabase Storage,
+sends it to OpenAI transcription with language auto-detection, optionally
+generates an English transcript, stores timestamped rows in
+`transcript_segments`, creates editable speaker rows in `participants`, links
+segments through `participant_id`, records detected/transcript/translation
+language metadata on `meetings`, and updates final success or failure status.
 After transcription completes, use Generate Analysis on the same detail page.
-The backend verifies meeting ownership, sends the transcript to OpenAI, stores
-the executive summary and meeting brief on `meetings`, replaces generated
-`action_items`, `decisions`, and `questions`, and updates
-`meetings.processing_status` through `analyzing`, `analyzed`, or
-`analysis_failed`.
+The backend verifies meeting ownership, sets the meeting to `analyzing`,
+enqueues a Celery job, and returns a `job_id`. The worker sends the transcript
+to OpenAI, stores the executive summary and meeting brief on `meetings`,
+replaces generated `action_items`, `decisions`, and `questions`, and updates
+`meetings.processing_status` through `analyzed` or `analysis_failed`.
 
 The MVP supports multilingual transcription and optional English transcripts
 for non-English audio while preserving original transcript text where possible.
@@ -140,6 +154,16 @@ source .venv/bin/activate
 pip install -r requirements.txt
 uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 ```
+
+Run Redis locally, then start the worker in a second backend shell:
+
+```bash
+celery -A app.worker:celery_app worker --loglevel=info
+```
+
+For non-Docker local development, set `REDIS_URL`, `CELERY_BROKER_URL`, and
+`CELERY_RESULT_BACKEND` to your local Redis host, for example
+`redis://localhost:6379/0` and `redis://localhost:6379/1`.
 
 On Windows PowerShell, activate the backend environment with:
 

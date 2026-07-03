@@ -55,16 +55,57 @@ Authorization: Bearer <supabase-access-token>
 ```
 
 The backend validates the user, confirms the meeting belongs to that user,
-downloads the private audio file from the `meeting-audio` Supabase Storage
-bucket, sends it to OpenAI transcription, replaces existing transcript segments
-for that meeting, and updates `meetings.processing_status`.
+sets `meetings.processing_status` to `transcribing`, enqueues a Celery job, and
+returns quickly. The worker downloads the private audio file from the
+`meeting-audio` Supabase Storage bucket, sends it to OpenAI transcription,
+replaces existing transcript segments for that meeting, and updates
+`meetings.processing_status`.
 
 Success response:
 
 ```json
 {
   "meeting_id": "meeting-uuid",
-  "processing_status": "transcribed",
-  "segment_count": 12
+  "job_id": "celery-job-id",
+  "processing_status": "transcribing"
+}
+```
+
+### Generate Analysis
+
+`POST /v1/meetings/{meeting_id}/analyze`
+
+Requires a Supabase access token. The backend validates ownership, sets
+`meetings.processing_status` to `analyzing`, enqueues a Celery job, and returns
+quickly.
+
+Success response:
+
+```json
+{
+  "meeting_id": "meeting-uuid",
+  "job_id": "celery-job-id",
+  "processing_status": "analyzing"
+}
+```
+
+### Job Status
+
+`GET /v1/meetings/{meeting_id}/jobs/{job_id}`
+
+Requires a Supabase access token and only returns status for meetings owned by
+the signed-in user.
+
+Success response:
+
+```json
+{
+  "meeting_id": "meeting-uuid",
+  "job_id": "celery-job-id",
+  "job_state": "STARTED",
+  "ready": false,
+  "successful": false,
+  "failed": false,
+  "processing_status": "transcribing"
 }
 ```

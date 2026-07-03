@@ -30,11 +30,16 @@ Key responsibilities:
 
 - Health and operational endpoints
 - Supabase token validation for protected API calls
-- AI processing orchestration
+- AI job enqueueing and processing-status APIs
 - Upload and processing job coordination
 - Export generation
 - Integration webhooks
-- Future background job dispatch
+
+Long-running AI work runs outside request handling through Celery workers.
+Redis is the Celery broker and result backend. The FastAPI service validates
+ownership, updates meeting status to a running state, enqueues jobs, and returns
+quickly with a `job_id`; workers perform OpenAI and Supabase side effects and
+write final success or failure statuses back to `meetings`.
 
 ## Supabase Database Architecture
 
@@ -114,22 +119,27 @@ signed URLs where needed.
 2. The frontend creates or updates the meeting record.
 3. Audio is stored in Supabase Storage and referenced from `attachments`.
 4. The meeting detail page calls the backend transcription endpoint with the
-   user's Supabase access token.
+   user's Supabase access token and translation preference.
 5. The backend validates the token, confirms the meeting belongs to the user,
-   downloads the private audio object from the `meeting-audio` bucket with the
-   service role key, and sends it to OpenAI transcription with language
-   auto-detection.
-6. Transcription produces timestamped transcript segments in
+   sets `meetings.processing_status` to `transcribing`, enqueues a Celery job,
+   and returns `meeting_id`, `job_id`, and `processing_status`.
+6. The frontend polls the protected job status endpoint and refreshes meeting
+   data while processing continues.
+7. The Celery worker downloads the private audio object from the
+   `meeting-audio` bucket with the service role key and sends it to OpenAI
+   transcription with language auto-detection.
+8. Transcription produces timestamped transcript segments in
    `transcript_segments`.
-7. If `translate_to_english` is requested for non-English audio, the backend
+9. If `translate_to_english` is requested for non-English audio, the worker
    also generates English transcript text and preserves original text where
    segment alignment is available.
-8. Speaker identification creates or reuses participant records and links
+10. Speaker identification creates or reuses participant records and links
    transcript segments through `participant_id`.
-9. AI extraction generates English summaries, action items, decisions, and
-   questions.
-10. Extracted records are stored with source transcript references.
-11. The frontend updates progress and shows reviewable results.
+11. Analysis requests follow the same queue pattern: FastAPI validates
+   ownership and enqueues, then the worker generates English summaries, action
+   items, decisions, and questions.
+12. Extracted records are stored with source transcript references.
+13. The frontend updates progress and shows reviewable results.
 
 The current transcription status flow uses `meetings.processing_status` values:
 
@@ -137,6 +147,9 @@ The current transcription status flow uses `meetings.processing_status` values:
 - `transcribing`
 - `transcribed`
 - `transcription_failed`
+- `analyzing`
+- `analyzed`
+- `analysis_failed`
 
 ## API Endpoint Plan
 
@@ -155,8 +168,11 @@ Planned backend endpoints:
 - `POST /v1/meetings/{meeting_id}/uploads`
 - `POST /v1/meetings/{meeting_id}/transcribe`
   - Request body: `{ "translate_to_english": true | false }`
-  - Response includes detected language, transcript language, optional
-    translation language, transcript kind, and segment count.
+  - Response includes `meeting_id`, `job_id`, and `processing_status`.
+- `POST /v1/meetings/{meeting_id}/analyze`
+  - Response includes `meeting_id`, `job_id`, and `processing_status`.
+- `GET /v1/meetings/{meeting_id}/jobs/{job_id}`
+  - Protected job and meeting processing-status polling endpoint.
 - `POST /v1/meetings/{meeting_id}/process`
 - `PATCH /v1/meetings/{meeting_id}/participants/{participant_id}`
 - `POST /v1/meetings/{meeting_id}/participants/merge`

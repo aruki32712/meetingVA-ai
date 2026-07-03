@@ -64,8 +64,25 @@ type Question = {
   status: string;
 };
 
+type JobEnqueueResponse = {
+  meeting_id: string;
+  job_id: string;
+  processing_status: string;
+};
+
+type JobStatusResponse = {
+  meeting_id: string;
+  job_id: string;
+  job_state: string;
+  ready: boolean;
+  successful: boolean;
+  failed: boolean;
+  processing_status: string;
+};
+
 const apiBaseUrl =
   process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000";
+const jobPollIntervalMs = 3000;
 
 function formatTranscriptTime(milliseconds: number) {
   const totalSeconds = Math.floor(milliseconds / 1000);
@@ -101,6 +118,21 @@ function formatLanguage(language: string | null) {
     .filter(Boolean)
     .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
     .join(" ");
+}
+
+function sleep(milliseconds: number) {
+  return new Promise((resolve) => {
+    window.setTimeout(resolve, milliseconds);
+  });
+}
+
+function isTerminalProcessingStatus(status: string) {
+  return [
+    "transcribed",
+    "transcription_failed",
+    "analyzed",
+    "analysis_failed"
+  ].includes(status);
 }
 
 export function MeetingDetail({ meetingId }: { meetingId: string }) {
@@ -240,7 +272,7 @@ export function MeetingDetail({ meetingId }: { meetingId: string }) {
     return accessToken;
   }
 
-  async function refreshMeetingData() {
+  const refreshMeetingData = useCallback(async () => {
     const result = await loadMeeting();
 
     setMeeting(result.meeting);
@@ -259,7 +291,7 @@ export function MeetingDetail({ meetingId }: { meetingId: string }) {
     setActionItems(result.actionItems);
     setDecisions(result.decisions);
     setQuestions(result.questions);
-  }
+  }, [loadMeeting]);
 
   useEffect(() => {
     let isMounted = true;
@@ -311,6 +343,61 @@ export function MeetingDetail({ meetingId }: { meetingId: string }) {
     };
   }, [loadMeeting]);
 
+  useEffect(() => {
+    const processingStatus = meeting?.processing_status;
+
+    if (!processingStatus || !["transcribing", "analyzing"].includes(processingStatus)) {
+      return;
+    }
+
+    const intervalId = window.setInterval(() => {
+      void refreshMeetingData();
+    }, jobPollIntervalMs);
+
+    return () => {
+      window.clearInterval(intervalId);
+    };
+  }, [meeting?.processing_status, refreshMeetingData]);
+
+  async function pollJobUntilSettled(jobId: string) {
+    const accessToken = await getAccessToken();
+
+    while (true) {
+      await sleep(jobPollIntervalMs);
+
+      const response = await fetch(
+        `${apiBaseUrl}/v1/meetings/${meetingId}/jobs/${jobId}`,
+        {
+          headers: {
+            Authorization: `Bearer ${accessToken}`
+          }
+        }
+      );
+
+      if (!response.ok) {
+        const payload = await response.json().catch(() => null);
+        throw new Error(payload?.detail ?? "Unable to check job status.");
+      }
+
+      const status = (await response.json()) as JobStatusResponse;
+
+      setMeeting((current) =>
+        current
+          ? { ...current, processing_status: status.processing_status }
+          : current
+      );
+
+      if (
+        status.ready ||
+        status.failed ||
+        isTerminalProcessingStatus(status.processing_status)
+      ) {
+        await refreshMeetingData();
+        return status;
+      }
+    }
+  }
+
   async function generateTranscript() {
     setIsTranscribing(true);
     setTranscriptionError("");
@@ -339,7 +426,18 @@ export function MeetingDetail({ meetingId }: { meetingId: string }) {
         throw new Error(payload?.detail ?? "Unable to generate transcript.");
       }
 
-      await refreshMeetingData();
+      const payload = (await response.json()) as JobEnqueueResponse;
+      setMeeting((current) =>
+        current
+          ? { ...current, processing_status: payload.processing_status }
+          : current
+      );
+
+      const status = await pollJobUntilSettled(payload.job_id);
+
+      if (status.failed || status.processing_status === "transcription_failed") {
+        throw new Error("Unable to generate transcript.");
+      }
     } catch (transcribeError) {
       setMeeting((current) =>
         current
@@ -382,7 +480,18 @@ export function MeetingDetail({ meetingId }: { meetingId: string }) {
         throw new Error(payload?.detail ?? "Unable to generate analysis.");
       }
 
-      await refreshMeetingData();
+      const payload = (await response.json()) as JobEnqueueResponse;
+      setMeeting((current) =>
+        current
+          ? { ...current, processing_status: payload.processing_status }
+          : current
+      );
+
+      const status = await pollJobUntilSettled(payload.job_id);
+
+      if (status.failed || status.processing_status === "analysis_failed") {
+        throw new Error("Unable to generate analysis.");
+      }
     } catch (analyzeError) {
       setMeeting((current) =>
         current ? { ...current, processing_status: "analysis_failed" } : current

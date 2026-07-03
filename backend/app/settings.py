@@ -14,6 +14,9 @@ class Settings(BaseSettings):
     openai_api_key: str = ""
     openai_transcription_model: str = "whisper-1"
     openai_analysis_model: str = "gpt-4o-mini"
+    redis_url: str = "redis://redis:6379/0"
+    celery_broker_url: str = "redis://redis:6379/0"
+    celery_result_backend: str = "redis://redis:6379/1"
 
     model_config = SettingsConfigDict(
         env_file=".env",
