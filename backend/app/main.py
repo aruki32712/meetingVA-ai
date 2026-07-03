@@ -1,3 +1,5 @@
+import json
+import re
 from pathlib import Path
 from typing import Any
 
@@ -114,6 +116,132 @@ def _build_transcript_rows(
     ]
 
 
+def _coerce_text(value: Any) -> str:
+    return str(value or "").strip()
+
+
+def _coerce_optional_text(value: Any) -> str | None:
+    text = _coerce_text(value)
+    return text or None
+
+
+def _coerce_due_at(value: Any) -> str | None:
+    text = _coerce_text(value)
+
+    if re.fullmatch(r"\d{4}-\d{2}-\d{2}", text):
+        return text
+
+    return None
+
+
+def _coerce_analysis_items(value: Any, required_field: str) -> list[dict[str, Any]]:
+    if not isinstance(value, list):
+        return []
+
+    rows = []
+
+    for item in value:
+        if not isinstance(item, dict):
+            continue
+
+        required_value = _coerce_text(item.get(required_field))
+
+        if not required_value:
+            continue
+
+        normalized = {required_field: required_value}
+
+        for key in ("title", "description", "assignee", "due_date", "answer", "status"):
+            if key != required_field:
+                normalized[key] = _coerce_optional_text(item.get(key))
+
+        rows.append(normalized)
+
+    return rows
+
+
+def _normalize_analysis_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    executive_summary = _coerce_text(payload.get("executive_summary"))
+    meeting_brief = _coerce_text(payload.get("meeting_brief"))
+
+    if not executive_summary or not meeting_brief:
+        raise HTTPException(
+            status_code=502,
+            detail="OpenAI returned incomplete meeting analysis.",
+        )
+
+    action_items = _coerce_analysis_items(payload.get("action_items"), "title")
+    decisions = _coerce_analysis_items(payload.get("decisions"), "title")
+    open_questions = _coerce_analysis_items(payload.get("open_questions"), "question")
+
+    return {
+        "executive_summary": executive_summary,
+        "meeting_brief": meeting_brief,
+        "action_items": action_items,
+        "decisions": decisions,
+        "open_questions": open_questions,
+    }
+
+
+def _build_analysis_rows(
+    meeting_id: str,
+    analysis: dict[str, Any],
+) -> dict[str, list[dict[str, Any]]]:
+    action_items = [
+        {
+            "meeting_id": meeting_id,
+            "title": item["title"],
+            "description": item.get("description"),
+            "status": "open",
+            "due_at": _coerce_due_at(item.get("due_date")),
+        }
+        for item in analysis["action_items"]
+    ]
+    decisions = [
+        {
+            "meeting_id": meeting_id,
+            "title": item["title"],
+            "description": item.get("description"),
+        }
+        for item in analysis["decisions"]
+    ]
+    questions = []
+
+    for item in analysis["open_questions"]:
+        status = item.get("status") or "open"
+
+        if status not in {"open", "answered", "deferred"}:
+            status = "open"
+
+        questions.append(
+            {
+                "meeting_id": meeting_id,
+                "question": item["question"],
+                "answer": item.get("answer"),
+                "status": status,
+            }
+        )
+
+    return {
+        "action_items": action_items,
+        "decisions": decisions,
+        "questions": questions,
+    }
+
+
+def _format_transcript_for_analysis(segments: list[dict[str, Any]]) -> str:
+    lines = []
+
+    for segment in segments:
+        speaker = _coerce_text(segment.get("speaker_label")) or "Speaker"
+        text = _coerce_text(segment.get("text"))
+
+        if text:
+            lines.append(f"{speaker}: {text}")
+
+    return "\n".join(lines)
+
+
 async def _transcribe_audio_with_openai(
     *,
     audio_bytes: bytes,
@@ -144,6 +272,76 @@ async def _transcribe_audio_with_openai(
         )
 
     return response.json()
+
+
+async def _analyze_transcript_with_openai(
+    *,
+    meeting_title: str,
+    transcript: str,
+) -> dict[str, Any]:
+    openai_api_key = _require_configured(settings.openai_api_key, "OPENAI_API_KEY")
+
+    payload = {
+        "model": settings.openai_analysis_model,
+        "response_format": {"type": "json_object"},
+        "messages": [
+            {
+                "role": "system",
+                "content": (
+                    "You generate structured meeting intelligence from transcripts. "
+                    "Return only valid JSON with keys executive_summary, meeting_brief, "
+                    "action_items, decisions, and open_questions. action_items must be "
+                    "an array of objects with title, description, assignee, and due_date. "
+                    "Use YYYY-MM-DD due_date values only when the transcript states a "
+                    "specific date; otherwise use null. "
+                    "decisions must be an array of objects with title and description. "
+                    "open_questions must be an array of objects with question, answer, "
+                    "and status, where status is open, answered, or deferred."
+                ),
+            },
+            {
+                "role": "user",
+                "content": (
+                    f"Meeting title: {meeting_title}\n\n"
+                    "Transcript:\n"
+                    f"{transcript}"
+                ),
+            },
+        ],
+    }
+
+    async with httpx.AsyncClient(timeout=120) as client:
+        response = await client.post(
+            "https://api.openai.com/v1/chat/completions",
+            headers={
+                "Authorization": f"Bearer {openai_api_key}",
+                "Content-Type": "application/json",
+            },
+            json=payload,
+        )
+
+    if response.status_code >= 400:
+        raise HTTPException(
+            status_code=502,
+            detail="OpenAI analysis request failed.",
+        )
+
+    content = (
+        response.json()
+        .get("choices", [{}])[0]
+        .get("message", {})
+        .get("content", "")
+    )
+
+    try:
+        parsed = json.loads(content)
+    except json.JSONDecodeError as exc:
+        raise HTTPException(
+            status_code=502,
+            detail="OpenAI returned invalid meeting analysis JSON.",
+        ) from exc
+
+    return _normalize_analysis_payload(parsed)
 
 
 @app.post("/v1/meetings/{meeting_id}/transcribe", tags=["meetings"])
@@ -239,4 +437,114 @@ async def transcribe_meeting(
         "meeting_id": meeting_id,
         "processing_status": "transcribed",
         "segment_count": len(rows),
+    }
+
+
+@app.post("/v1/meetings/{meeting_id}/analyze", tags=["meetings"])
+async def analyze_meeting(
+    meeting_id: str,
+    authorization: str | None = Header(default=None),
+) -> dict[str, Any]:
+    token = _require_bearer_token(authorization)
+    anon_client = get_supabase_anon_client()
+    service_client = get_supabase_service_client()
+
+    try:
+        user_response = anon_client.auth.get_user(token)
+        user_id = user_response.user.id
+    except Exception as exc:
+        raise HTTPException(status_code=401, detail="Invalid Supabase session.") from exc
+
+    meeting_response = (
+        service_client.table("meetings")
+        .select("id,user_id,owner_id,title,processing_status")
+        .eq("id", meeting_id)
+        .or_(f"user_id.eq.{user_id},owner_id.eq.{user_id}")
+        .limit(1)
+        .execute()
+    )
+    meeting = meeting_response.data[0] if meeting_response.data else None
+
+    if not meeting:
+        raise HTTPException(status_code=404, detail="Meeting was not found.")
+
+    if meeting.get("processing_status") in {"transcribing", "analyzing"}:
+        raise HTTPException(status_code=409, detail="Meeting is already processing.")
+
+    transcript_response = (
+        service_client.table("transcript_segments")
+        .select("id,speaker_label,text,segment_index")
+        .eq("meeting_id", meeting_id)
+        .order("segment_index")
+        .execute()
+    )
+    transcript_segments = transcript_response.data or []
+    transcript = _format_transcript_for_analysis(transcript_segments)
+
+    if not transcript:
+        raise HTTPException(status_code=400, detail="Meeting has no transcript.")
+
+    try:
+        (
+            service_client.table("meetings")
+            .update({"processing_status": "analyzing"})
+            .eq("id", meeting_id)
+            .execute()
+        )
+
+        analysis = await _analyze_transcript_with_openai(
+            meeting_title=meeting.get("title") or "Untitled meeting",
+            transcript=transcript,
+        )
+        rows = _build_analysis_rows(meeting_id, analysis)
+
+        for table_name in ("action_items", "decisions", "questions"):
+            (
+                service_client.table(table_name)
+                .delete()
+                .eq("meeting_id", meeting_id)
+                .execute()
+            )
+
+            if rows[table_name]:
+                service_client.table(table_name).insert(rows[table_name]).execute()
+
+        (
+            service_client.table("meetings")
+            .update(
+                {
+                    "summary": analysis["executive_summary"],
+                    "brief": analysis["meeting_brief"],
+                    "processing_status": "analyzed",
+                }
+            )
+            .eq("id", meeting_id)
+            .execute()
+        )
+    except HTTPException:
+        (
+            service_client.table("meetings")
+            .update({"processing_status": "analysis_failed"})
+            .eq("id", meeting_id)
+            .execute()
+        )
+        raise
+    except Exception as exc:
+        (
+            service_client.table("meetings")
+            .update({"processing_status": "analysis_failed"})
+            .eq("id", meeting_id)
+            .execute()
+        )
+        raise HTTPException(
+            status_code=500,
+            detail="Unable to analyze meeting transcript.",
+        ) from exc
+
+    return {
+        "meeting_id": meeting_id,
+        "processing_status": "analyzed",
+        "action_item_count": len(rows["action_items"]),
+        "decision_count": len(rows["decisions"]),
+        "question_count": len(rows["questions"]),
     }

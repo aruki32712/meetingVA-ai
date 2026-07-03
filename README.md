@@ -3,8 +3,8 @@
 Initial full-stack scaffold for MeetingVA AI, a meeting capture and intelligence
 application. This repository is intentionally thin right now: it provides a
 working local architecture, health checks, environment templates, Docker setup,
-dashboard progress tracking, meeting capture, AI transcription, and Supabase
-PostgreSQL migrations.
+dashboard progress tracking, meeting capture, AI transcription, AI meeting
+intelligence, and Supabase PostgreSQL migrations.
 
 Project planning docs:
 
@@ -64,6 +64,7 @@ Required AI values:
 
 - `OPENAI_API_KEY`
 - `OPENAI_TRANSCRIPTION_MODEL` defaults to `whisper-1`
+- `OPENAI_ANALYSIS_MODEL` defaults to `gpt-4o-mini`
 
 See [docs/SUPABASE_SETUP.md](docs/SUPABASE_SETUP.md) for project creation,
 API key lookup, database URL setup, migrations, storage buckets,
@@ -94,6 +95,12 @@ Generate Transcript. The frontend sends the Supabase access token to the
 backend, which verifies meeting ownership, downloads the private audio object
 from Supabase Storage, sends it to OpenAI transcription, stores timestamped
 rows in `transcript_segments`, and updates `meetings.processing_status`.
+After transcription completes, use Generate Analysis on the same detail page.
+The backend verifies meeting ownership, sends the transcript to OpenAI, stores
+the executive summary and meeting brief on `meetings`, replaces generated
+`action_items`, `decisions`, and `questions`, and updates
+`meetings.processing_status` through `analyzing`, `analyzed`, or
+`analysis_failed`.
 
 Supabase Auth should allow `http://localhost:3000` as a local site/redirect URL.
 
@@ -137,8 +144,9 @@ attachments, and meeting-tag relationships. The progress tracker migration adds
 owner-scoped project phases and checklist items. The meeting capture migration
 adds browser-recording metadata fields and creates the private `meeting-audio`
 Storage bucket. The transcription migration adds transcript-specific processing
-statuses. All application migrations enable row-level security with Supabase
-Auth policies.
+statuses. The meeting intelligence migration adds meeting summary and brief
+fields plus analysis-specific processing statuses. All application migrations
+enable row-level security with Supabase Auth policies.
 
 Apply it with the Supabase CLI from a linked project:
 

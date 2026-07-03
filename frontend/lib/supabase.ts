@@ -22,6 +22,9 @@ type MeetingProcessingStatus =
   | "transcribing"
   | "transcribed"
   | "transcription_failed"
+  | "analyzing"
+  | "analyzed"
+  | "analysis_failed"
   | "processing"
   | "completed"
   | "failed";
@@ -47,6 +50,8 @@ type Database = {
           audio_storage_path: string | null;
           duration_seconds: number | null;
           processing_status: MeetingProcessingStatus;
+          summary: string | null;
+          brief: string | null;
           tags: string[];
           created_at: string;
           updated_at: string;
@@ -66,6 +71,8 @@ type Database = {
           audio_storage_path?: string | null;
           duration_seconds?: number | null;
           processing_status?: MeetingProcessingStatus;
+          summary?: string | null;
+          brief?: string | null;
           tags?: string[];
           created_at?: string;
           updated_at?: string;
@@ -85,6 +92,8 @@ type Database = {
           audio_storage_path?: string | null;
           duration_seconds?: number | null;
           processing_status?: MeetingProcessingStatus;
+          summary?: string | null;
+          brief?: string | null;
           tags?: string[];
           created_at?: string;
           updated_at?: string;
@@ -178,6 +187,132 @@ type Database = {
         Relationships: [
           {
             foreignKeyName: "transcript_segments_meeting_id_fkey";
+            columns: ["meeting_id"];
+            isOneToOne: false;
+            referencedRelation: "meetings";
+            referencedColumns: ["id"];
+          }
+        ];
+      };
+      action_items: {
+        Row: {
+          id: string;
+          meeting_id: string;
+          assignee_participant_id: string | null;
+          title: string;
+          description: string | null;
+          status: "open" | "in_progress" | "completed" | "cancelled";
+          due_at: string | null;
+          source_segment_id: string | null;
+          created_at: string;
+          updated_at: string;
+        };
+        Insert: {
+          id?: string;
+          meeting_id: string;
+          assignee_participant_id?: string | null;
+          title: string;
+          description?: string | null;
+          status?: "open" | "in_progress" | "completed" | "cancelled";
+          due_at?: string | null;
+          source_segment_id?: string | null;
+          created_at?: string;
+          updated_at?: string;
+        };
+        Update: {
+          id?: string;
+          meeting_id?: string;
+          assignee_participant_id?: string | null;
+          title?: string;
+          description?: string | null;
+          status?: "open" | "in_progress" | "completed" | "cancelled";
+          due_at?: string | null;
+          source_segment_id?: string | null;
+          created_at?: string;
+          updated_at?: string;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "action_items_meeting_id_fkey";
+            columns: ["meeting_id"];
+            isOneToOne: false;
+            referencedRelation: "meetings";
+            referencedColumns: ["id"];
+          }
+        ];
+      };
+      decisions: {
+        Row: {
+          id: string;
+          meeting_id: string;
+          title: string;
+          description: string | null;
+          source_segment_id: string | null;
+          created_at: string;
+        };
+        Insert: {
+          id?: string;
+          meeting_id: string;
+          title: string;
+          description?: string | null;
+          source_segment_id?: string | null;
+          created_at?: string;
+        };
+        Update: {
+          id?: string;
+          meeting_id?: string;
+          title?: string;
+          description?: string | null;
+          source_segment_id?: string | null;
+          created_at?: string;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "decisions_meeting_id_fkey";
+            columns: ["meeting_id"];
+            isOneToOne: false;
+            referencedRelation: "meetings";
+            referencedColumns: ["id"];
+          }
+        ];
+      };
+      questions: {
+        Row: {
+          id: string;
+          meeting_id: string;
+          participant_id: string | null;
+          question: string;
+          answer: string | null;
+          status: "open" | "answered" | "deferred";
+          source_segment_id: string | null;
+          created_at: string;
+          updated_at: string;
+        };
+        Insert: {
+          id?: string;
+          meeting_id: string;
+          participant_id?: string | null;
+          question: string;
+          answer?: string | null;
+          status?: "open" | "answered" | "deferred";
+          source_segment_id?: string | null;
+          created_at?: string;
+          updated_at?: string;
+        };
+        Update: {
+          id?: string;
+          meeting_id?: string;
+          participant_id?: string | null;
+          question?: string;
+          answer?: string | null;
+          status?: "open" | "answered" | "deferred";
+          source_segment_id?: string | null;
+          created_at?: string;
+          updated_at?: string;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "questions_meeting_id_fkey";
             columns: ["meeting_id"];
             isOneToOne: false;
             referencedRelation: "meetings";

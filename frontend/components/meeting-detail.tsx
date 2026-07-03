@@ -13,6 +13,8 @@ type MeetingDetailRow = {
   audio_storage_path: string | null;
   duration_seconds: number | null;
   processing_status: string;
+  summary: string | null;
+  brief: string | null;
   tags: string[];
 };
 
@@ -25,12 +27,26 @@ type TranscriptSegment = {
   segment_index: number;
 };
 
-const futureFeatures = [
-  "Summary",
-  "Action Items",
-  "Decisions",
-  "Questions"
-];
+type ActionItem = {
+  id: string;
+  title: string;
+  description: string | null;
+  status: string;
+  due_at: string | null;
+};
+
+type Decision = {
+  id: string;
+  title: string;
+  description: string | null;
+};
+
+type Question = {
+  id: string;
+  question: string;
+  answer: string | null;
+  status: string;
+};
 
 const apiBaseUrl =
   process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000";
@@ -48,18 +64,23 @@ export function MeetingDetail({ meetingId }: { meetingId: string }) {
   const [transcriptSegments, setTranscriptSegments] = useState<
     TranscriptSegment[]
   >([]);
+  const [actionItems, setActionItems] = useState<ActionItem[]>([]);
+  const [decisions, setDecisions] = useState<Decision[]>([]);
+  const [questions, setQuestions] = useState<Question[]>([]);
   const [audioUrl, setAudioUrl] = useState("");
   const [isLoading, setIsLoading] = useState(true);
   const [isTranscribing, setIsTranscribing] = useState(false);
+  const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [error, setError] = useState("");
   const [transcriptionError, setTranscriptionError] = useState("");
+  const [analysisError, setAnalysisError] = useState("");
 
   const loadMeeting = useCallback(async () => {
     const supabase = createBrowserSupabaseClient();
     const { data, error: meetingError } = await supabase
       .from("meetings")
       .select(
-        "id,title,description,meeting_date,audio_storage_path,duration_seconds,processing_status,tags"
+        "id,title,description,meeting_date,audio_storage_path,duration_seconds,processing_status,summary,brief,tags"
       )
       .eq("id", meetingId)
       .single();
@@ -76,6 +97,36 @@ export function MeetingDetail({ meetingId }: { meetingId: string }) {
 
     if (transcriptError) {
       throw transcriptError;
+    }
+
+    const { data: actionItemRows, error: actionItemError } = await supabase
+      .from("action_items")
+      .select("id,title,description,status,due_at")
+      .eq("meeting_id", meetingId)
+      .order("created_at", { ascending: true });
+
+    if (actionItemError) {
+      throw actionItemError;
+    }
+
+    const { data: decisionRows, error: decisionError } = await supabase
+      .from("decisions")
+      .select("id,title,description")
+      .eq("meeting_id", meetingId)
+      .order("created_at", { ascending: true });
+
+    if (decisionError) {
+      throw decisionError;
+    }
+
+    const { data: questionRows, error: questionError } = await supabase
+      .from("questions")
+      .select("id,question,answer,status")
+      .eq("meeting_id", meetingId)
+      .order("created_at", { ascending: true });
+
+    if (questionError) {
+      throw questionError;
     }
 
     let signedAudioUrl = "";
@@ -96,7 +147,10 @@ export function MeetingDetail({ meetingId }: { meetingId: string }) {
     return {
       meeting: data,
       audioUrl: signedAudioUrl,
-      transcriptSegments: segments ?? []
+      transcriptSegments: segments ?? [],
+      actionItems: actionItemRows ?? [],
+      decisions: decisionRows ?? [],
+      questions: questionRows ?? []
     };
   }, [meetingId]);
 
@@ -114,6 +168,9 @@ export function MeetingDetail({ meetingId }: { meetingId: string }) {
           setMeeting(result.meeting);
           setAudioUrl(result.audioUrl);
           setTranscriptSegments(result.transcriptSegments);
+          setActionItems(result.actionItems);
+          setDecisions(result.decisions);
+          setQuestions(result.questions);
         }
       } catch (loadError) {
         if (isMounted) {
@@ -179,6 +236,9 @@ export function MeetingDetail({ meetingId }: { meetingId: string }) {
       setMeeting(result.meeting);
       setAudioUrl(result.audioUrl);
       setTranscriptSegments(result.transcriptSegments);
+      setActionItems(result.actionItems);
+      setDecisions(result.decisions);
+      setQuestions(result.questions);
     } catch (transcribeError) {
       setMeeting((current) =>
         current
@@ -192,6 +252,65 @@ export function MeetingDetail({ meetingId }: { meetingId: string }) {
       );
     } finally {
       setIsTranscribing(false);
+    }
+  }
+
+  async function generateAnalysis() {
+    setIsAnalyzing(true);
+    setAnalysisError("");
+
+    try {
+      const supabase = createBrowserSupabaseClient();
+      const { data: sessionData, error: sessionError } =
+        await supabase.auth.getSession();
+
+      if (sessionError) {
+        throw sessionError;
+      }
+
+      const accessToken = sessionData.session?.access_token;
+
+      if (!accessToken) {
+        throw new Error("You must be signed in to generate analysis.");
+      }
+
+      setMeeting((current) =>
+        current ? { ...current, processing_status: "analyzing" } : current
+      );
+
+      const response = await fetch(
+        `${apiBaseUrl}/v1/meetings/${meetingId}/analyze`,
+        {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${accessToken}`
+          }
+        }
+      );
+
+      if (!response.ok) {
+        const payload = await response.json().catch(() => null);
+        throw new Error(payload?.detail ?? "Unable to generate analysis.");
+      }
+
+      const result = await loadMeeting();
+      setMeeting(result.meeting);
+      setAudioUrl(result.audioUrl);
+      setTranscriptSegments(result.transcriptSegments);
+      setActionItems(result.actionItems);
+      setDecisions(result.decisions);
+      setQuestions(result.questions);
+    } catch (analyzeError) {
+      setMeeting((current) =>
+        current ? { ...current, processing_status: "analysis_failed" } : current
+      );
+      setAnalysisError(
+        analyzeError instanceof Error
+          ? analyzeError.message
+          : "Unable to generate analysis."
+      );
+    } finally {
+      setIsAnalyzing(false);
     }
   }
 
@@ -213,6 +332,10 @@ export function MeetingDetail({ meetingId }: { meetingId: string }) {
 
   const isMeetingTranscribing =
     isTranscribing || meeting.processing_status === "transcribing";
+  const isMeetingAnalyzing =
+    isAnalyzing || meeting.processing_status === "analyzing";
+  const canAnalyze =
+    transcriptSegments.length > 0 && !isMeetingTranscribing && !isMeetingAnalyzing;
 
   return (
     <div className="flex flex-col gap-5">
@@ -294,6 +417,59 @@ export function MeetingDetail({ meetingId }: { meetingId: string }) {
       </section>
 
       <section className="rounded-lg border border-slate-200 bg-white p-6 shadow-sm">
+        <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+          <div>
+            <h3 className="text-base font-semibold text-ink">
+              Meeting Intelligence
+            </h3>
+            <p className="mt-1 text-sm text-slate-600">
+              {isMeetingAnalyzing
+                ? "Analysis is in progress."
+                : meeting.processing_status === "analyzed"
+                  ? "AI-generated summary and structured meeting records."
+                  : "Generate analysis after the transcript is ready."}
+            </p>
+          </div>
+          <button
+            className="rounded-md bg-ink px-4 py-2 text-sm font-medium text-white transition hover:bg-slate-700 disabled:cursor-not-allowed disabled:bg-slate-300"
+            type="button"
+            onClick={generateAnalysis}
+            disabled={!canAnalyze}
+          >
+            {isMeetingAnalyzing ? "Analyzing..." : "Generate Analysis"}
+          </button>
+        </div>
+
+        {isMeetingAnalyzing ? (
+          <div className="mt-5 h-2 overflow-hidden rounded-full bg-slate-200">
+            <div className="h-full w-2/3 animate-pulse rounded-full bg-ink" />
+          </div>
+        ) : null}
+
+        {analysisError ? (
+          <div className="mt-5 rounded-lg border border-red-200 bg-red-50 p-4 text-sm text-red-700">
+            {analysisError}
+          </div>
+        ) : null}
+
+        <div className="mt-5 grid gap-4 lg:grid-cols-2">
+          <article className="rounded-lg border border-slate-200 bg-slate-50 p-4">
+            <h4 className="text-sm font-semibold text-ink">Executive Summary</h4>
+            <p className="mt-2 text-sm leading-6 text-slate-700">
+              {meeting.summary || "No summary has been generated yet."}
+            </p>
+          </article>
+
+          <article className="rounded-lg border border-slate-200 bg-slate-50 p-4">
+            <h4 className="text-sm font-semibold text-ink">Meeting Brief</h4>
+            <p className="mt-2 text-sm leading-6 text-slate-700">
+              {meeting.brief || "No brief has been generated yet."}
+            </p>
+          </article>
+        </div>
+      </section>
+
+      <section className="rounded-lg border border-slate-200 bg-white p-6 shadow-sm">
         <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
           <div>
             <h3 className="text-base font-semibold text-ink">Transcript</h3>
@@ -341,18 +517,100 @@ export function MeetingDetail({ meetingId }: { meetingId: string }) {
         ) : null}
       </section>
 
-      <section className="grid gap-4 md:grid-cols-2">
-        {futureFeatures.map((feature) => (
-          <article
-            className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm"
-            key={feature}
-          >
-            <h3 className="text-base font-semibold text-ink">{feature}</h3>
+      <section className="grid gap-4 lg:grid-cols-3">
+        <article className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+          <h3 className="text-base font-semibold text-ink">Action Items</h3>
+          {actionItems.length > 0 ? (
+            <div className="mt-4 grid gap-3">
+              {actionItems.map((item) => (
+                <div
+                  className="rounded-lg border border-slate-200 bg-slate-50 p-4"
+                  key={item.id}
+                >
+                  <div className="flex flex-wrap items-center gap-2">
+                    <p className="text-sm font-semibold text-ink">{item.title}</p>
+                    <span className="rounded-full border border-slate-300 bg-white px-2 py-0.5 text-xs font-medium capitalize text-slate-600">
+                      {item.status.replace("_", " ")}
+                    </span>
+                  </div>
+                  {item.description ? (
+                    <p className="mt-2 text-sm leading-6 text-slate-600">
+                      {item.description}
+                    </p>
+                  ) : null}
+                  {item.due_at ? (
+                    <p className="mt-2 text-xs font-medium text-slate-500">
+                      Due {formatDate(item.due_at)}
+                    </p>
+                  ) : null}
+                </div>
+              ))}
+            </div>
+          ) : (
             <p className="mt-2 text-sm leading-6 text-slate-600">
-              Waiting for AI processing.
+              No action items have been generated yet.
             </p>
-          </article>
-        ))}
+          )}
+        </article>
+
+        <article className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+          <h3 className="text-base font-semibold text-ink">Decisions</h3>
+          {decisions.length > 0 ? (
+            <div className="mt-4 grid gap-3">
+              {decisions.map((decision) => (
+                <div
+                  className="rounded-lg border border-slate-200 bg-slate-50 p-4"
+                  key={decision.id}
+                >
+                  <p className="text-sm font-semibold text-ink">
+                    {decision.title}
+                  </p>
+                  {decision.description ? (
+                    <p className="mt-2 text-sm leading-6 text-slate-600">
+                      {decision.description}
+                    </p>
+                  ) : null}
+                </div>
+              ))}
+            </div>
+          ) : (
+            <p className="mt-2 text-sm leading-6 text-slate-600">
+              No decisions have been generated yet.
+            </p>
+          )}
+        </article>
+
+        <article className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+          <h3 className="text-base font-semibold text-ink">Questions</h3>
+          {questions.length > 0 ? (
+            <div className="mt-4 grid gap-3">
+              {questions.map((question) => (
+                <div
+                  className="rounded-lg border border-slate-200 bg-slate-50 p-4"
+                  key={question.id}
+                >
+                  <div className="flex flex-wrap items-center gap-2">
+                    <p className="text-sm font-semibold text-ink">
+                      {question.question}
+                    </p>
+                    <span className="rounded-full border border-slate-300 bg-white px-2 py-0.5 text-xs font-medium capitalize text-slate-600">
+                      {question.status}
+                    </span>
+                  </div>
+                  {question.answer ? (
+                    <p className="mt-2 text-sm leading-6 text-slate-600">
+                      {question.answer}
+                    </p>
+                  ) : null}
+                </div>
+              ))}
+            </div>
+          ) : (
+            <p className="mt-2 text-sm leading-6 text-slate-600">
+              No questions have been generated yet.
+            </p>
+          )}
+        </article>
       </section>
     </div>
   );

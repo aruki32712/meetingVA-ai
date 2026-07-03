@@ -1,7 +1,13 @@
 import pytest
 from fastapi import HTTPException
 
-from app.main import _build_transcript_rows, _require_bearer_token
+from app.main import (
+    _build_analysis_rows,
+    _build_transcript_rows,
+    _format_transcript_for_analysis,
+    _normalize_analysis_payload,
+    _require_bearer_token,
+)
 
 
 def test_require_bearer_token_accepts_valid_header() -> None:
@@ -71,3 +77,62 @@ def test_build_transcript_rows_rejects_empty_transcript() -> None:
         )
 
     assert exc_info.value.status_code == 502
+
+
+def test_normalize_analysis_payload_requires_summary_and_brief() -> None:
+    with pytest.raises(HTTPException) as exc_info:
+        _normalize_analysis_payload(
+            {
+                "executive_summary": "Summary",
+                "meeting_brief": "",
+                "action_items": [],
+                "decisions": [],
+                "open_questions": [],
+            }
+        )
+
+    assert exc_info.value.status_code == 502
+
+
+def test_build_analysis_rows_maps_structured_items() -> None:
+    analysis = _normalize_analysis_payload(
+        {
+            "executive_summary": "Summary",
+            "meeting_brief": "Brief",
+            "action_items": [
+                {
+                    "title": "Send notes",
+                    "description": "Share meeting notes.",
+                    "due_date": "2026-07-10",
+                },
+                {
+                    "title": "Pick date",
+                    "description": "Ambiguous due date should be ignored.",
+                    "due_date": "next Friday",
+                },
+            ],
+            "decisions": [{"title": "Ship MVP", "description": "Proceed."}],
+            "open_questions": [
+                {"question": "Who owns launch?", "answer": "", "status": "unknown"}
+            ],
+        }
+    )
+
+    rows = _build_analysis_rows("meeting-id", analysis)
+
+    assert rows["action_items"][0]["due_at"] == "2026-07-10"
+    assert rows["action_items"][1]["due_at"] is None
+    assert rows["decisions"][0]["title"] == "Ship MVP"
+    assert rows["questions"][0]["status"] == "open"
+
+
+def test_format_transcript_for_analysis_uses_speaker_labels() -> None:
+    transcript = _format_transcript_for_analysis(
+        [
+            {"speaker_label": "Sam", "text": "We should launch."},
+            {"speaker_label": None, "text": "Agreed."},
+            {"speaker_label": "Empty", "text": "   "},
+        ]
+    )
+
+    assert transcript == "Sam: We should launch.\nSpeaker: Agreed."

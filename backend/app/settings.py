@@ -13,6 +13,7 @@ class Settings(BaseSettings):
     supabase_database_url: str = ""
     openai_api_key: str = ""
     openai_transcription_model: str = "whisper-1"
+    openai_analysis_model: str = "gpt-4o-mini"
 
     model_config = SettingsConfigDict(
         env_file=".env",
