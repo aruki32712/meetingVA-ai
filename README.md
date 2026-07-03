@@ -1,1 +1,120 @@
-# meetingVA-ai
+# MeetingVA AI
+
+Initial full-stack scaffold for MeetingVA AI, a meeting capture and intelligence
+application. This repository is intentionally thin right now: it provides a
+working local architecture, health checks, environment templates, Docker setup,
+and the first Supabase PostgreSQL schema migration.
+
+## Stack
+
+- Frontend: Next.js 15 App Router, React, TypeScript, Tailwind CSS
+- Backend: FastAPI on Python 3.12
+- Data/auth/storage: Supabase Auth, Supabase PostgreSQL, Supabase Storage
+- Local runtime: Docker and docker-compose
+
+## Repository Layout
+
+```text
+frontend/                     Next.js app shell
+backend/                      FastAPI service
+scripts/supabase/migrations/  Supabase SQL migrations
+docker/                       Docker compose and service Dockerfiles
+shared/                       Shared API contracts and notes
+```
+
+## Prerequisites
+
+- Node.js 20+
+- pnpm 11+
+- Python 3.12+
+- Docker Desktop
+- Supabase project or local Supabase CLI environment
+
+## Environment Setup
+
+Copy the example environment files before running services:
+
+```bash
+cp frontend/.env.example frontend/.env.local
+cp backend/.env.example backend/.env
+```
+
+Fill in the Supabase values from your project dashboard. For local Docker
+development, the backend URL defaults to `http://localhost:8000` and the
+frontend runs on `http://localhost:3000`.
+
+## Run With Docker
+
+```bash
+docker compose -f docker/docker-compose.yml up --build
+```
+
+Health checks:
+
+- Frontend: `http://localhost:3000/api/health`
+- Backend: `http://localhost:8000/health`
+
+## Run Without Docker
+
+Frontend:
+
+```bash
+cd frontend
+pnpm install
+pnpm run dev
+```
+
+Backend:
+
+```bash
+cd backend
+python -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
+```
+
+On Windows PowerShell, activate the backend environment with:
+
+```powershell
+.\.venv\Scripts\Activate.ps1
+```
+
+## Database Migrations
+
+The first schema migration lives at:
+
+```text
+scripts/supabase/migrations/0001_initial_schema.sql
+```
+
+It defines the core production tables for meetings, participants, transcript
+segments, action items, decisions, questions, tags, attachments, and meeting-tag
+relationships. It also enables row-level security and basic owner-scoped
+policies using Supabase Auth.
+
+Apply it with the Supabase CLI from a linked project:
+
+```bash
+supabase db push --include-all
+```
+
+Or paste the migration into the Supabase SQL editor for a first bootstrap.
+
+## Available Checks
+
+Frontend:
+
+```bash
+cd frontend
+pnpm run lint
+pnpm run typecheck
+```
+
+Backend:
+
+```bash
+cd backend
+python -m compileall app
+python -m pytest
+```
