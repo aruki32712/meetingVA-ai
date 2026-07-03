@@ -53,6 +53,10 @@ class AssignTranscriptSegmentsRequest(BaseModel):
     display_name: str | None = Field(default=None, max_length=120)
 
 
+class TranscribeMeetingRequest(BaseModel):
+    translate_to_english: bool = False
+
+
 @app.get("/health", tags=["system"])
 def health_check() -> dict[str, str]:
     return {
@@ -104,8 +108,16 @@ def _build_transcript_rows(
     meeting_id: str,
     transcription: dict[str, Any],
     duration_seconds: int | None,
+    *,
+    original_transcription: dict[str, Any] | None = None,
+    transcript_kind: str = "original",
 ) -> list[dict[str, Any]]:
     segments = transcription.get("segments")
+    original_segments = (
+        original_transcription.get("segments")
+        if isinstance(original_transcription, dict)
+        else None
+    )
 
     if isinstance(segments, list) and segments:
         rows = []
@@ -121,14 +133,35 @@ def _build_transcript_rows(
 
             start_ms = _coerce_segment_timestamp(segment.get("start"))
             end_ms = max(start_ms, _coerce_segment_timestamp(segment.get("end")))
+            original_segment = (
+                original_segments[index]
+                if isinstance(original_segments, list)
+                and index < len(original_segments)
+                and isinstance(original_segments[index], dict)
+                else None
+            )
 
             rows.append(
                 {
                     "meeting_id": meeting_id,
-                    "speaker_label": _extract_speaker_label(segment, index),
+                    "speaker_label": _extract_speaker_label(segment, index)
+                    or (
+                        _extract_speaker_label(original_segment, index)
+                        if original_segment
+                        else None
+                    ),
                     "start_ms": start_ms,
                     "end_ms": end_ms,
                     "text": text,
+                    "original_text": _extract_parallel_segment_text(
+                        original_segments,
+                        index,
+                        fallback_text=text if transcript_kind == "original" else None,
+                    ),
+                    "translated_text": text
+                    if transcript_kind in {"translated", "both"}
+                    else None,
+                    "transcript_kind": transcript_kind,
                     "confidence": None,
                     "segment_index": index,
                 }
@@ -149,6 +182,15 @@ def _build_transcript_rows(
             "start_ms": 0,
             "end_ms": max(0, (duration_seconds or 0) * 1000),
             "text": transcript_text,
+            "original_text": _coerce_optional_text(
+                original_transcription.get("text")
+                if isinstance(original_transcription, dict)
+                else transcript_text
+            ),
+            "translated_text": transcript_text
+            if transcript_kind in {"translated", "both"}
+            else None,
+            "transcript_kind": transcript_kind,
             "confidence": None,
             "segment_index": 0,
         }
@@ -162,6 +204,21 @@ def _coerce_text(value: Any) -> str:
 def _coerce_optional_text(value: Any) -> str | None:
     text = _coerce_text(value)
     return text or None
+
+
+def _extract_parallel_segment_text(
+    segments: Any,
+    index: int,
+    *,
+    fallback_text: str | None = None,
+) -> str | None:
+    if isinstance(segments, list) and index < len(segments):
+        segment = segments[index]
+
+        if isinstance(segment, dict):
+            return _coerce_optional_text(segment.get("text")) or fallback_text
+
+    return fallback_text
 
 
 def _fallback_speaker_label(index: int) -> str:
@@ -265,10 +322,10 @@ def _attach_participants_to_transcript_rows(
     participant_rows = [
         {
             "meeting_id": meeting_id,
-            "display_name": label,
+            "display_name": _fallback_speaker_label(index),
             "speaker_label": label,
         }
-        for label in labels
+        for index, label in enumerate(labels)
     ]
     created = service_client.table("participants").insert(participant_rows).execute()
     participants_by_label = {
@@ -393,13 +450,51 @@ def _format_transcript_for_analysis(segments: list[dict[str, Any]]) -> str:
     lines = []
 
     for segment in segments:
-        speaker = _coerce_text(segment.get("speaker_label")) or "Speaker"
+        participant = segment.get("participants")
+        speaker = ""
+
+        if isinstance(participant, dict):
+            speaker = _coerce_text(participant.get("display_name"))
+
+        speaker = speaker or _coerce_text(segment.get("speaker_label")) or "Speaker"
         text = _coerce_text(segment.get("text"))
 
         if text:
             lines.append(f"{speaker}: {text}")
 
     return "\n".join(lines)
+
+
+def _normalize_language(value: Any) -> str | None:
+    language = _coerce_optional_text(value)
+
+    if not language:
+        return None
+
+    normalized = language.lower().replace("_", "-")
+    aliases = {
+        "en": "english",
+        "eng": "english",
+        "english": "english",
+    }
+
+    return aliases.get(normalized, normalized)
+
+
+def _is_english_language(language: str | None) -> bool:
+    return _normalize_language(language) == "english"
+
+
+def _transcript_kind(
+    *,
+    detected_language: str | None,
+    translate_to_english: bool,
+    translated: bool,
+) -> str:
+    if translated:
+        return "both" if detected_language else "translated"
+
+    return "original"
 
 
 async def _transcribe_audio_with_openai(
@@ -429,6 +524,38 @@ async def _transcribe_audio_with_openai(
         raise HTTPException(
             status_code=502,
             detail="OpenAI transcription request failed.",
+        )
+
+    return response.json()
+
+
+async def _translate_audio_with_openai(
+    *,
+    audio_bytes: bytes,
+    filename: str,
+    content_type: str,
+) -> dict[str, Any]:
+    openai_api_key = _require_configured(settings.openai_api_key, "OPENAI_API_KEY")
+
+    form_data = [
+        ("model", settings.openai_transcription_model),
+        ("response_format", "verbose_json"),
+        ("timestamp_granularities[]", "segment"),
+    ]
+    files = {"file": (filename, audio_bytes, content_type)}
+
+    async with httpx.AsyncClient(timeout=120) as client:
+        response = await client.post(
+            "https://api.openai.com/v1/audio/translations",
+            headers={"Authorization": f"Bearer {openai_api_key}"},
+            data=form_data,
+            files=files,
+        )
+
+    if response.status_code >= 400:
+        raise HTTPException(
+            status_code=502,
+            detail="OpenAI translation request failed.",
         )
 
     return response.json()
@@ -507,6 +634,7 @@ async def _analyze_transcript_with_openai(
 @app.post("/v1/meetings/{meeting_id}/transcribe", tags=["meetings"])
 async def transcribe_meeting(
     meeting_id: str,
+    payload: TranscribeMeetingRequest | None = None,
     authorization: str | None = Header(default=None),
 ) -> dict[str, Any]:
     token = _require_bearer_token(authorization)
@@ -536,10 +664,35 @@ async def transcribe_meeting(
             filename=filename,
             content_type="application/octet-stream",
         )
+        detected_language = _normalize_language(transcription.get("language"))
+        translate_to_english = bool(payload and payload.translate_to_english)
+        should_translate = translate_to_english and not _is_english_language(
+            detected_language
+        )
+        transcript_payload = transcription
+        translated = False
+
+        if should_translate:
+            transcript_payload = await _translate_audio_with_openai(
+                audio_bytes=audio_bytes,
+                filename=filename,
+                content_type="application/octet-stream",
+            )
+            translated = True
+
+        transcript_language = "english" if translated else detected_language
+        translation_language = "english" if translated else None
+        transcript_kind = _transcript_kind(
+            detected_language=detected_language,
+            translate_to_english=translate_to_english,
+            translated=translated,
+        )
         rows = _build_transcript_rows(
             meeting_id=meeting_id,
-            transcription=transcription,
+            transcription=transcript_payload,
             duration_seconds=meeting.get("duration_seconds"),
+            original_transcription=transcription,
+            transcript_kind=transcript_kind,
         )
 
         (
@@ -563,7 +716,16 @@ async def transcribe_meeting(
         service_client.table("transcript_segments").insert(rows).execute()
         (
             service_client.table("meetings")
-            .update({"processing_status": "transcribed"})
+            .update(
+                {
+                    "processing_status": "transcribed",
+                    "detected_language": detected_language,
+                    "transcript_language": transcript_language,
+                    "translation_language": translation_language,
+                    "transcript_kind": transcript_kind,
+                    "translate_to_english": translate_to_english,
+                }
+            )
             .eq("id", meeting_id)
             .execute()
         )
@@ -591,6 +753,10 @@ async def transcribe_meeting(
         "meeting_id": meeting_id,
         "processing_status": "transcribed",
         "segment_count": len(rows),
+        "detected_language": detected_language,
+        "transcript_language": transcript_language,
+        "translation_language": translation_language,
+        "transcript_kind": transcript_kind,
     }
 
 
@@ -609,7 +775,7 @@ async def analyze_meeting(
 
     transcript_response = (
         service_client.table("transcript_segments")
-        .select("id,speaker_label,text,segment_index")
+        .select("id,speaker_label,text,segment_index,participants(display_name)")
         .eq("meeting_id", meeting_id)
         .order("segment_index")
         .execute()

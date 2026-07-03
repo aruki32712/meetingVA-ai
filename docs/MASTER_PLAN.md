@@ -21,6 +21,8 @@ find the supporting evidence.
 - Support uploaded audio for meetings recorded elsewhere.
 - Store meeting metadata, audio attachments, transcript segments, extracted
   insights, and exports in a secure user-owned data model.
+- Support multilingual transcription in the MVP while keeping summaries,
+  analysis, and the app UI in English for now.
 - Provide clear progress feedback while recordings, uploads, transcription, and
   AI extraction jobs run.
 - Let users review and correct transcript, speaker, summary, action item,
@@ -63,6 +65,7 @@ docs/                         Project roadmap, architecture, and planning docs
 - Audio upload
 - Meeting storage
 - AI transcription
+- Multilingual transcription with optional English transcript generation
 - Meeting detail page
 - Meeting summary
 - Action items
@@ -75,6 +78,7 @@ docs/                         Project roadmap, architecture, and planning docs
 - Speaker identification
 - Transcript editor
 - Speaker editor
+- Expanded multilingual review workflows
 - Search
 - Export PDF
 - Export DOCX
@@ -112,6 +116,7 @@ docs/                         Project roadmap, architecture, and planning docs
 - [x] Audio Upload
 - [x] Meeting Storage
 - [x] AI Transcription
+- [x] Multilingual Transcription
 - [x] Meeting Summary
 - [x] Action Items
 - [x] Decisions

@@ -4,7 +4,8 @@ Initial full-stack scaffold for MeetingVA AI, a meeting capture and intelligence
 application. This repository is intentionally thin right now: it provides a
 working local architecture, health checks, environment templates, Docker setup,
 dashboard progress tracking, meeting capture, AI transcription, speaker
-management, AI meeting intelligence, and Supabase PostgreSQL migrations.
+management, multilingual transcription metadata, AI meeting intelligence, and
+Supabase PostgreSQL migrations.
 
 Project planning docs:
 
@@ -91,18 +92,25 @@ Authentication routes:
 - Progress tracker: `http://localhost:3000/dashboard/progress`
 
 After a meeting recording is uploaded, open its meeting detail page and use
-Generate Transcript. The frontend sends the Supabase access token to the
-backend, which verifies meeting ownership, downloads the private audio object
-from Supabase Storage, sends it to OpenAI transcription, stores timestamped
-rows in `transcript_segments`, creates editable speaker rows in `participants`,
-links segments through `participant_id`, and updates
-`meetings.processing_status`.
+Generate Transcript. Optionally enable English translation for non-English
+audio. The frontend sends the Supabase access token and translation preference
+to the backend, which verifies meeting ownership, downloads the private audio
+object from Supabase Storage, sends it to OpenAI transcription with language
+auto-detection, stores timestamped rows in `transcript_segments`, creates
+editable speaker rows in `participants`, links segments through
+`participant_id`, records detected/transcript/translation language metadata on
+`meetings`, and updates `meetings.processing_status`.
 After transcription completes, use Generate Analysis on the same detail page.
 The backend verifies meeting ownership, sends the transcript to OpenAI, stores
 the executive summary and meeting brief on `meetings`, replaces generated
 `action_items`, `decisions`, and `questions`, and updates
 `meetings.processing_status` through `analyzing`, `analyzed`, or
 `analysis_failed`.
+
+The MVP supports multilingual transcription and optional English transcripts
+for non-English audio while preserving original transcript text where possible.
+Meeting summaries, structured analysis, and the app UI remain English-only for
+now.
 
 The meeting detail page includes a Speakers section for renaming speakers,
 merging duplicate speakers, and assigning transcript segments to another
@@ -156,8 +164,10 @@ Storage bucket. The transcription migration adds transcript-specific processing
 statuses. The meeting intelligence migration adds meeting summary and brief
 fields plus analysis-specific processing statuses. The speaker intelligence
 migration adds participant metadata, speaker-label indexes, and participant
-updated timestamps. All application migrations enable row-level security with
-Supabase Auth policies.
+updated timestamps. The multilingual transcription migration adds meeting
+language metadata, translation preference, transcript kind, and original versus
+translated segment text storage. All application migrations enable row-level
+security with Supabase Auth policies.
 
 Apply it with the Supabase CLI from a linked project:
 

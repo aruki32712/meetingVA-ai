@@ -6,8 +6,11 @@ from app.main import (
     _build_analysis_rows,
     _build_transcript_rows,
     _format_transcript_for_analysis,
+    _is_english_language,
     _normalize_analysis_payload,
+    _normalize_language,
     _require_bearer_token,
+    _transcript_kind,
 )
 
 
@@ -69,6 +72,9 @@ def test_build_transcript_rows_maps_openai_segments_to_milliseconds() -> None:
             "start_ms": 250,
             "end_ms": 2500,
             "text": "First segment.",
+            "original_text": "First segment.",
+            "translated_text": None,
+            "transcript_kind": "original",
             "confidence": None,
             "segment_index": 0,
         },
@@ -78,6 +84,9 @@ def test_build_transcript_rows_maps_openai_segments_to_milliseconds() -> None:
             "start_ms": 2500,
             "end_ms": 4750,
             "text": "Second segment.",
+            "original_text": "Second segment.",
+            "translated_text": None,
+            "transcript_kind": "original",
             "confidence": None,
             "segment_index": 1,
         },
@@ -127,8 +136,40 @@ def test_build_transcript_rows_falls_back_to_single_text_segment() -> None:
     )
 
     assert rows[0]["text"] == "Full transcript."
+    assert rows[0]["original_text"] == "Full transcript."
+    assert rows[0]["translated_text"] is None
+    assert rows[0]["transcript_kind"] == "original"
     assert rows[0]["start_ms"] == 0
     assert rows[0]["end_ms"] == 3000
+
+
+def test_build_transcript_rows_preserves_original_text_for_translation() -> None:
+    rows = _build_transcript_rows(
+        meeting_id="meeting-id",
+        transcription={
+            "segments": [
+                {"start": 0, "end": 1, "text": "Hello team."},
+            ]
+        },
+        original_transcription={
+            "segments": [
+                {
+                    "start": 0,
+                    "end": 1,
+                    "text": "Hola equipo.",
+                    "speaker_label": "spk_0",
+                },
+            ]
+        },
+        duration_seconds=12,
+        transcript_kind="both",
+    )
+
+    assert rows[0]["speaker_label"] == "spk_0"
+    assert rows[0]["text"] == "Hello team."
+    assert rows[0]["original_text"] == "Hola equipo."
+    assert rows[0]["translated_text"] == "Hello team."
+    assert rows[0]["transcript_kind"] == "both"
 
 
 def test_build_transcript_rows_rejects_empty_transcript() -> None:
@@ -199,3 +240,42 @@ def test_format_transcript_for_analysis_uses_speaker_labels() -> None:
     )
 
     assert transcript == "Sam: We should launch.\nSpeaker: Agreed."
+
+
+def test_format_transcript_for_analysis_prefers_participant_names() -> None:
+    transcript = _format_transcript_for_analysis(
+        [
+            {
+                "speaker_label": "spk_0",
+                "participants": {"display_name": "Jordan"},
+                "text": "We should launch.",
+            }
+        ]
+    )
+
+    assert transcript == "Jordan: We should launch."
+
+
+def test_language_helpers_normalize_english_aliases() -> None:
+    assert _normalize_language("EN") == "english"
+    assert _is_english_language("eng")
+    assert not _is_english_language("spanish")
+
+
+def test_transcript_kind_tracks_translation_state() -> None:
+    assert (
+        _transcript_kind(
+            detected_language="spanish",
+            translate_to_english=True,
+            translated=True,
+        )
+        == "both"
+    )
+    assert (
+        _transcript_kind(
+            detected_language="english",
+            translate_to_english=True,
+            translated=False,
+        )
+        == "original"
+    )

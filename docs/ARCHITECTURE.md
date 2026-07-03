@@ -62,6 +62,14 @@ while `participants.display_name` is the user-facing name. Participant metadata
 includes non-biometric reference fields for future diarization or voiceprint
 systems; voice biometric recognition is not implemented.
 
+Multilingual transcription metadata is stored on `meetings` with
+`detected_language`, `transcript_language`, `translation_language`,
+`translate_to_english`, and `transcript_kind`. Segment rows can preserve
+`original_text` and `translated_text` while `text` remains the transcript shown
+to users and passed into English-only meeting analysis. MVP transcription can
+process non-English audio and optionally generate an English transcript, but
+summaries, structured analysis, and the application UI remain English for now.
+
 The dashboard progress tracker stores user-owned project planning state in:
 
 - `project_progress_phases`
@@ -109,14 +117,19 @@ signed URLs where needed.
    user's Supabase access token.
 5. The backend validates the token, confirms the meeting belongs to the user,
    downloads the private audio object from the `meeting-audio` bucket with the
-   service role key, and sends it to OpenAI transcription.
+   service role key, and sends it to OpenAI transcription with language
+   auto-detection.
 6. Transcription produces timestamped transcript segments in
    `transcript_segments`.
-7. Speaker identification creates or reuses participant records and links
+7. If `translate_to_english` is requested for non-English audio, the backend
+   also generates English transcript text and preserves original text where
+   segment alignment is available.
+8. Speaker identification creates or reuses participant records and links
    transcript segments through `participant_id`.
-8. AI extraction generates summaries, action items, decisions, and questions.
-9. Extracted records are stored with source transcript references.
-10. The frontend updates progress and shows reviewable results.
+9. AI extraction generates English summaries, action items, decisions, and
+   questions.
+10. Extracted records are stored with source transcript references.
+11. The frontend updates progress and shows reviewable results.
 
 The current transcription status flow uses `meetings.processing_status` values:
 
@@ -141,6 +154,9 @@ Planned backend endpoints:
 - `PATCH /v1/meetings/{meeting_id}`
 - `POST /v1/meetings/{meeting_id}/uploads`
 - `POST /v1/meetings/{meeting_id}/transcribe`
+  - Request body: `{ "translate_to_english": true | false }`
+  - Response includes detected language, transcript language, optional
+    translation language, transcript kind, and segment count.
 - `POST /v1/meetings/{meeting_id}/process`
 - `PATCH /v1/meetings/{meeting_id}/participants/{participant_id}`
 - `POST /v1/meetings/{meeting_id}/participants/merge`

@@ -15,6 +15,11 @@ type MeetingDetailRow = {
   processing_status: string;
   summary: string | null;
   brief: string | null;
+  detected_language: string | null;
+  transcript_language: string | null;
+  translation_language: string | null;
+  translate_to_english: boolean;
+  transcript_kind: "original" | "translated" | "both";
   tags: string[];
 };
 
@@ -25,6 +30,9 @@ type TranscriptSegment = {
   start_ms: number;
   end_ms: number;
   text: string;
+  original_text: string | null;
+  translated_text: string | null;
+  transcript_kind: "original" | "translated" | "both";
   segment_index: number;
 };
 
@@ -83,6 +91,18 @@ function fallbackSpeakerName(index: number) {
   return `Speaker ${index + 1}`;
 }
 
+function formatLanguage(language: string | null) {
+  if (!language) {
+    return "Auto-detect";
+  }
+
+  return language
+    .split(/[-_\s]+/)
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(" ");
+}
+
 export function MeetingDetail({ meetingId }: { meetingId: string }) {
   const [meeting, setMeeting] = useState<MeetingDetailRow | null>(null);
   const [transcriptSegments, setTranscriptSegments] = useState<
@@ -103,6 +123,7 @@ export function MeetingDetail({ meetingId }: { meetingId: string }) {
   const [isLoading, setIsLoading] = useState(true);
   const [isTranscribing, setIsTranscribing] = useState(false);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
+  const [translateToEnglish, setTranslateToEnglish] = useState(false);
   const [error, setError] = useState("");
   const [transcriptionError, setTranscriptionError] = useState("");
   const [analysisError, setAnalysisError] = useState("");
@@ -114,7 +135,7 @@ export function MeetingDetail({ meetingId }: { meetingId: string }) {
     const { data, error: meetingError } = await supabase
       .from("meetings")
       .select(
-        "id,title,description,meeting_date,audio_storage_path,duration_seconds,processing_status,summary,brief,tags"
+        "id,title,description,meeting_date,audio_storage_path,duration_seconds,processing_status,summary,brief,detected_language,transcript_language,translation_language,translate_to_english,transcript_kind,tags"
       )
       .eq("id", meetingId)
       .single();
@@ -125,7 +146,9 @@ export function MeetingDetail({ meetingId }: { meetingId: string }) {
 
     const { data: segments, error: transcriptError } = await supabase
       .from("transcript_segments")
-      .select("id,participant_id,speaker_label,start_ms,end_ms,text,segment_index")
+      .select(
+        "id,participant_id,speaker_label,start_ms,end_ms,text,original_text,translated_text,transcript_kind,segment_index"
+      )
       .eq("meeting_id", meetingId)
       .order("segment_index", { ascending: true });
 
@@ -232,6 +255,7 @@ export function MeetingDetail({ meetingId }: { meetingId: string }) {
         ])
       )
     );
+    setTranslateToEnglish(result.meeting.translate_to_english ?? false);
     setActionItems(result.actionItems);
     setDecisions(result.decisions);
     setQuestions(result.questions);
@@ -260,6 +284,7 @@ export function MeetingDetail({ meetingId }: { meetingId: string }) {
               ])
             )
           );
+          setTranslateToEnglish(result.meeting.translate_to_english ?? false);
           setActionItems(result.actionItems);
           setDecisions(result.decisions);
           setQuestions(result.questions);
@@ -302,8 +327,10 @@ export function MeetingDetail({ meetingId }: { meetingId: string }) {
         {
           method: "POST",
           headers: {
-            Authorization: `Bearer ${accessToken}`
-          }
+            Authorization: `Bearer ${accessToken}`,
+            "Content-Type": "application/json"
+          },
+          body: JSON.stringify({ translate_to_english: translateToEnglish })
         }
       );
 
@@ -612,6 +639,23 @@ export function MeetingDetail({ meetingId }: { meetingId: string }) {
           </div>
           <div className="rounded-lg border border-slate-200 bg-slate-50 p-4">
             <dt className="text-xs font-medium uppercase tracking-wide text-slate-500">
+              Detected Language
+            </dt>
+            <dd className="mt-1 text-sm font-semibold text-ink">
+              {formatLanguage(meeting.detected_language)}
+            </dd>
+          </div>
+          <div className="rounded-lg border border-slate-200 bg-slate-50 p-4">
+            <dt className="text-xs font-medium uppercase tracking-wide text-slate-500">
+              Transcript Language
+            </dt>
+            <dd className="mt-1 text-sm font-semibold text-ink">
+              {formatLanguage(meeting.transcript_language)}
+              {meeting.transcript_kind === "both" ? " (translated)" : ""}
+            </dd>
+          </div>
+          <div className="rounded-lg border border-slate-200 bg-slate-50 p-4">
+            <dt className="text-xs font-medium uppercase tracking-wide text-slate-500">
               Tags
             </dt>
             <dd className="mt-1 text-sm font-semibold text-ink">
@@ -623,7 +667,20 @@ export function MeetingDetail({ meetingId }: { meetingId: string }) {
         {audioUrl ? (
           <div className="mt-6 grid gap-4">
             <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-              <p className="text-sm font-medium text-ink">Audio Player</p>
+              <div>
+                <p className="text-sm font-medium text-ink">Audio Player</p>
+                <label className="mt-2 flex items-center gap-2 text-sm text-slate-600">
+                  <input
+                    className="h-4 w-4 rounded border-slate-300 text-signal focus:ring-signal"
+                    type="checkbox"
+                    checked={translateToEnglish}
+                    onChange={(event) =>
+                      setTranslateToEnglish(event.target.checked)
+                    }
+                  />
+                  Translate non-English audio to English
+                </label>
+              </div>
               <button
                 className="rounded-md bg-signal px-4 py-2 text-sm font-medium text-white transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:bg-slate-300"
                 type="button"
@@ -861,6 +918,11 @@ export function MeetingDetail({ meetingId }: { meetingId: string }) {
                 <p className="mt-2 text-sm leading-6 text-ink">
                   {segment.text}
                 </p>
+                {segment.transcript_kind === "both" && segment.original_text ? (
+                  <p className="mt-2 border-l-2 border-slate-300 pl-3 text-sm leading-6 text-slate-600">
+                    Original: {segment.original_text}
+                  </p>
+                ) : null}
                 {participants.length > 1 ? (
                   <div className="mt-3">
                     <label

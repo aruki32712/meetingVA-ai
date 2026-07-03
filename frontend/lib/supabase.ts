@@ -30,6 +30,7 @@ type MeetingProcessingStatus =
   | "failed";
 
 type AttachmentKind = "audio" | "transcript" | "document" | "image" | "other";
+type TranscriptKind = "original" | "translated" | "both";
 
 type Database = {
   public: {
@@ -52,6 +53,11 @@ type Database = {
           processing_status: MeetingProcessingStatus;
           summary: string | null;
           brief: string | null;
+          detected_language: string | null;
+          transcript_language: string | null;
+          translation_language: string | null;
+          translate_to_english: boolean;
+          transcript_kind: TranscriptKind;
           tags: string[];
           created_at: string;
           updated_at: string;
@@ -73,6 +79,11 @@ type Database = {
           processing_status?: MeetingProcessingStatus;
           summary?: string | null;
           brief?: string | null;
+          detected_language?: string | null;
+          transcript_language?: string | null;
+          translation_language?: string | null;
+          translate_to_english?: boolean;
+          transcript_kind?: TranscriptKind;
           tags?: string[];
           created_at?: string;
           updated_at?: string;
@@ -94,6 +105,11 @@ type Database = {
           processing_status?: MeetingProcessingStatus;
           summary?: string | null;
           brief?: string | null;
+          detected_language?: string | null;
+          transcript_language?: string | null;
+          translation_language?: string | null;
+          translate_to_english?: boolean;
+          transcript_kind?: TranscriptKind;
           tags?: string[];
           created_at?: string;
           updated_at?: string;
@@ -206,6 +222,9 @@ type Database = {
           start_ms: number;
           end_ms: number;
           text: string;
+          original_text: string | null;
+          translated_text: string | null;
+          transcript_kind: TranscriptKind;
           confidence: number | null;
           segment_index: number;
           created_at: string;
@@ -218,6 +237,9 @@ type Database = {
           start_ms: number;
           end_ms: number;
           text: string;
+          original_text?: string | null;
+          translated_text?: string | null;
+          transcript_kind?: TranscriptKind;
           confidence?: number | null;
           segment_index: number;
           created_at?: string;
@@ -230,6 +252,9 @@ type Database = {
           start_ms?: number;
           end_ms?: number;
           text?: string;
+          original_text?: string | null;
+          translated_text?: string | null;
+          transcript_kind?: TranscriptKind;
           confidence?: number | null;
           segment_index?: number;
           created_at?: string;
