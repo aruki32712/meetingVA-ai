@@ -41,3 +41,30 @@ The initial Supabase migration defines:
 - `tags`
 - `meeting_tags`
 - `attachments`
+
+## Meetings
+
+### Generate Transcript
+
+`POST /v1/meetings/{meeting_id}/transcribe`
+
+Requires a Supabase access token:
+
+```http
+Authorization: Bearer <supabase-access-token>
+```
+
+The backend validates the user, confirms the meeting belongs to that user,
+downloads the private audio file from the `meeting-audio` Supabase Storage
+bucket, sends it to OpenAI transcription, replaces existing transcript segments
+for that meeting, and updates `meetings.processing_status`.
+
+Success response:
+
+```json
+{
+  "meeting_id": "meeting-uuid",
+  "processing_status": "transcribed",
+  "segment_count": 12
+}
+```

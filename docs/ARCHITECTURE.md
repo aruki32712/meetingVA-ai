@@ -98,12 +98,24 @@ signed URLs where needed.
 1. User records audio in the browser or uploads an existing file.
 2. The frontend creates or updates the meeting record.
 3. Audio is stored in Supabase Storage and referenced from `attachments`.
-4. The backend creates a processing job.
-5. Transcription produces timestamped transcript segments.
-6. Speaker identification links transcript segments to speakers or participants.
-7. AI extraction generates summaries, action items, decisions, and questions.
-8. Extracted records are stored with source transcript references.
-9. The frontend updates progress and shows reviewable results.
+4. The meeting detail page calls the backend transcription endpoint with the
+   user's Supabase access token.
+5. The backend validates the token, confirms the meeting belongs to the user,
+   downloads the private audio object from the `meeting-audio` bucket with the
+   service role key, and sends it to OpenAI transcription.
+6. Transcription produces timestamped transcript segments in
+   `transcript_segments`.
+7. Speaker identification links transcript segments to speakers or participants.
+8. AI extraction generates summaries, action items, decisions, and questions.
+9. Extracted records are stored with source transcript references.
+10. The frontend updates progress and shows reviewable results.
+
+The current transcription status flow uses `meetings.processing_status` values:
+
+- `uploaded`
+- `transcribing`
+- `transcribed`
+- `transcription_failed`
 
 ## API Endpoint Plan
 
@@ -120,6 +132,7 @@ Planned backend endpoints:
 - `GET /v1/meetings/{meeting_id}`
 - `PATCH /v1/meetings/{meeting_id}`
 - `POST /v1/meetings/{meeting_id}/uploads`
+- `POST /v1/meetings/{meeting_id}/transcribe`
 - `POST /v1/meetings/{meeting_id}/process`
 - `GET /v1/meetings/{meeting_id}/progress`
 - `GET /v1/meetings/{meeting_id}/transcript`

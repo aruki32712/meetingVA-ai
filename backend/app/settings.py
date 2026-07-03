@@ -11,6 +11,8 @@ class Settings(BaseSettings):
     supabase_anon_key: str = ""
     supabase_service_role_key: str = ""
     supabase_database_url: str = ""
+    openai_api_key: str = ""
+    openai_transcription_model: str = "whisper-1"
 
     model_config = SettingsConfigDict(
         env_file=".env",

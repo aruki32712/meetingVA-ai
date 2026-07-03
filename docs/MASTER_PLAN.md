@@ -111,13 +111,13 @@ docs/                         Project roadmap, architecture, and planning docs
 - [x] Browser Audio Recording
 - [x] Audio Upload
 - [x] Meeting Storage
-- [ ] AI Transcription
+- [x] AI Transcription
 - [ ] Speaker Identification
 - [ ] Meeting Summary
 - [ ] Action Items
 - [ ] Decisions
 - [ ] Questions
-- [ ] Meeting Detail Page
+- [x] Meeting Detail Page
 - [ ] Transcript Editor
 - [ ] Speaker Editor
 - [ ] Search

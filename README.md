@@ -3,7 +3,8 @@
 Initial full-stack scaffold for MeetingVA AI, a meeting capture and intelligence
 application. This repository is intentionally thin right now: it provides a
 working local architecture, health checks, environment templates, Docker setup,
-dashboard progress tracking, and Supabase PostgreSQL migrations.
+dashboard progress tracking, meeting capture, AI transcription, and Supabase
+PostgreSQL migrations.
 
 Project planning docs:
 
@@ -59,6 +60,11 @@ Required Supabase values:
 - `SUPABASE_SERVICE_ROLE_KEY`
 - `SUPABASE_DATABASE_URL`
 
+Required AI values:
+
+- `OPENAI_API_KEY`
+- `OPENAI_TRANSCRIPTION_MODEL` defaults to `whisper-1`
+
 See [docs/SUPABASE_SETUP.md](docs/SUPABASE_SETUP.md) for project creation,
 API key lookup, database URL setup, migrations, storage buckets,
 authentication, and troubleshooting.
@@ -82,6 +88,12 @@ Authentication routes:
 - Meetings: `http://localhost:3000/dashboard/meetings`
 - New meeting capture: `http://localhost:3000/dashboard/meetings/new`
 - Progress tracker: `http://localhost:3000/dashboard/progress`
+
+After a meeting recording is uploaded, open its meeting detail page and use
+Generate Transcript. The frontend sends the Supabase access token to the
+backend, which verifies meeting ownership, downloads the private audio object
+from Supabase Storage, sends it to OpenAI transcription, stores timestamped
+rows in `transcript_segments`, and updates `meetings.processing_status`.
 
 Supabase Auth should allow `http://localhost:3000` as a local site/redirect URL.
 
@@ -124,8 +136,9 @@ participants, transcript segments, action items, decisions, questions, tags,
 attachments, and meeting-tag relationships. The progress tracker migration adds
 owner-scoped project phases and checklist items. The meeting capture migration
 adds browser-recording metadata fields and creates the private `meeting-audio`
-Storage bucket. All application migrations enable row-level security with
-Supabase Auth policies.
+Storage bucket. The transcription migration adds transcript-specific processing
+statuses. All application migrations enable row-level security with Supabase
+Auth policies.
 
 Apply it with the Supabase CLI from a linked project:
 
@@ -145,6 +158,7 @@ Frontend:
 cd frontend
 pnpm run lint
 pnpm run typecheck
+pnpm run build
 ```
 
 Backend:

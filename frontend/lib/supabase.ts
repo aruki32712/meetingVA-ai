@@ -19,6 +19,9 @@ type MeetingStatus =
 type MeetingProcessingStatus =
   | "draft"
   | "uploaded"
+  | "transcribing"
+  | "transcribed"
+  | "transcription_failed"
   | "processing"
   | "completed"
   | "failed";
@@ -128,6 +131,53 @@ type Database = {
         Relationships: [
           {
             foreignKeyName: "attachments_meeting_id_fkey";
+            columns: ["meeting_id"];
+            isOneToOne: false;
+            referencedRelation: "meetings";
+            referencedColumns: ["id"];
+          }
+        ];
+      };
+      transcript_segments: {
+        Row: {
+          id: string;
+          meeting_id: string;
+          participant_id: string | null;
+          speaker_label: string | null;
+          start_ms: number;
+          end_ms: number;
+          text: string;
+          confidence: number | null;
+          segment_index: number;
+          created_at: string;
+        };
+        Insert: {
+          id?: string;
+          meeting_id: string;
+          participant_id?: string | null;
+          speaker_label?: string | null;
+          start_ms: number;
+          end_ms: number;
+          text: string;
+          confidence?: number | null;
+          segment_index: number;
+          created_at?: string;
+        };
+        Update: {
+          id?: string;
+          meeting_id?: string;
+          participant_id?: string | null;
+          speaker_label?: string | null;
+          start_ms?: number;
+          end_ms?: number;
+          text?: string;
+          confidence?: number | null;
+          segment_index?: number;
+          created_at?: string;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "transcript_segments_meeting_id_fkey";
             columns: ["meeting_id"];
             isOneToOne: false;
             referencedRelation: "meetings";
