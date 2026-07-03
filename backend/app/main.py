@@ -6,6 +6,7 @@ from typing import Any
 import httpx
 from fastapi import FastAPI, Header, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel, Field, field_validator
 
 from app.supabase_client import get_supabase_anon_client, get_supabase_service_client
 from app.settings import get_settings
@@ -25,6 +26,31 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+class UpdateParticipantRequest(BaseModel):
+    display_name: str = Field(min_length=1, max_length=120)
+
+    @field_validator("display_name")
+    @classmethod
+    def display_name_must_have_text(cls, value: str) -> str:
+        display_name = value.strip()
+
+        if not display_name:
+            raise ValueError("Speaker name cannot be empty.")
+
+        return display_name
+
+
+class MergeParticipantsRequest(BaseModel):
+    source_participant_id: str
+    target_participant_id: str
+
+
+class AssignTranscriptSegmentsRequest(BaseModel):
+    segment_ids: list[str] = Field(min_length=1)
+    target_participant_id: str | None = None
+    display_name: str | None = Field(default=None, max_length=120)
 
 
 @app.get("/health", tags=["system"])
@@ -61,6 +87,19 @@ def _coerce_segment_timestamp(value: Any) -> int:
     return max(0, round(float(value) * 1000))
 
 
+def _extract_speaker_label(segment: dict[str, Any], fallback_index: int) -> str | None:
+    for key in ("speaker_label", "speaker", "speaker_id"):
+        value = _coerce_optional_text(segment.get(key))
+
+        if value:
+            return value
+
+    if segment.get("speaker") is not None:
+        return f"Speaker {fallback_index + 1}"
+
+    return None
+
+
 def _build_transcript_rows(
     meeting_id: str,
     transcription: dict[str, Any],
@@ -86,7 +125,7 @@ def _build_transcript_rows(
             rows.append(
                 {
                     "meeting_id": meeting_id,
-                    "speaker_label": None,
+                    "speaker_label": _extract_speaker_label(segment, index),
                     "start_ms": start_ms,
                     "end_ms": end_ms,
                     "text": text,
@@ -123,6 +162,127 @@ def _coerce_text(value: Any) -> str:
 def _coerce_optional_text(value: Any) -> str | None:
     text = _coerce_text(value)
     return text or None
+
+
+def _fallback_speaker_label(index: int) -> str:
+    return f"Speaker {index + 1}"
+
+
+def _speaker_label_for_row(row: dict[str, Any], fallback_index: int) -> str:
+    return _coerce_optional_text(row.get("speaker_label")) or _fallback_speaker_label(
+        fallback_index
+    )
+
+
+def _require_user_id(token: str) -> str:
+    anon_client = get_supabase_anon_client()
+
+    try:
+        user_response = anon_client.auth.get_user(token)
+        return user_response.user.id
+    except Exception as exc:
+        raise HTTPException(status_code=401, detail="Invalid Supabase session.") from exc
+
+
+def _require_owned_meeting(service_client: Any, meeting_id: str, user_id: str) -> dict[str, Any]:
+    meeting_response = (
+        service_client.table("meetings")
+        .select("id,user_id,owner_id,title,audio_storage_path,duration_seconds,processing_status")
+        .eq("id", meeting_id)
+        .or_(f"user_id.eq.{user_id},owner_id.eq.{user_id}")
+        .limit(1)
+        .execute()
+    )
+    meeting = meeting_response.data[0] if meeting_response.data else None
+
+    if not meeting:
+        raise HTTPException(status_code=404, detail="Meeting was not found.")
+
+    return meeting
+
+
+def _require_participant(
+    service_client: Any,
+    *,
+    meeting_id: str,
+    participant_id: str,
+) -> dict[str, Any]:
+    participant_response = (
+        service_client.table("participants")
+        .select("id,meeting_id,display_name,speaker_label")
+        .eq("id", participant_id)
+        .eq("meeting_id", meeting_id)
+        .limit(1)
+        .execute()
+    )
+    participant = participant_response.data[0] if participant_response.data else None
+
+    if not participant:
+        raise HTTPException(status_code=404, detail="Participant was not found.")
+
+    return participant
+
+
+def _create_participant(
+    service_client: Any,
+    *,
+    meeting_id: str,
+    display_name: str,
+    speaker_label: str | None = None,
+) -> dict[str, Any]:
+    created = (
+        service_client.table("participants")
+        .insert(
+            {
+                "meeting_id": meeting_id,
+                "display_name": display_name,
+                "speaker_label": speaker_label,
+            }
+        )
+        .execute()
+    )
+
+    return created.data[0]
+
+
+def _attach_participants_to_transcript_rows(
+    service_client: Any,
+    *,
+    meeting_id: str,
+    rows: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    labels: list[str] = []
+
+    for index, row in enumerate(rows):
+        label = _speaker_label_for_row(row, index)
+
+        if label not in labels:
+            labels.append(label)
+
+    if not labels:
+        return rows
+
+    participant_rows = [
+        {
+            "meeting_id": meeting_id,
+            "display_name": label,
+            "speaker_label": label,
+        }
+        for label in labels
+    ]
+    created = service_client.table("participants").insert(participant_rows).execute()
+    participants_by_label = {
+        participant["speaker_label"]: participant["id"]
+        for participant in created.data
+        if participant.get("speaker_label")
+    }
+
+    for index, row in enumerate(rows):
+        label = _speaker_label_for_row(row, index)
+        row["speaker_label"] = label
+        row["participant_id"] = participants_by_label[label]
+
+    return rows
 
 
 def _coerce_due_at(value: Any) -> str | None:
@@ -350,27 +510,9 @@ async def transcribe_meeting(
     authorization: str | None = Header(default=None),
 ) -> dict[str, Any]:
     token = _require_bearer_token(authorization)
-    anon_client = get_supabase_anon_client()
     service_client = get_supabase_service_client()
-
-    try:
-        user_response = anon_client.auth.get_user(token)
-        user_id = user_response.user.id
-    except Exception as exc:
-        raise HTTPException(status_code=401, detail="Invalid Supabase session.") from exc
-
-    meeting_response = (
-        service_client.table("meetings")
-        .select("id,user_id,owner_id,audio_storage_path,duration_seconds")
-        .eq("id", meeting_id)
-        .or_(f"user_id.eq.{user_id},owner_id.eq.{user_id}")
-        .limit(1)
-        .execute()
-    )
-    meeting = meeting_response.data[0] if meeting_response.data else None
-
-    if not meeting:
-        raise HTTPException(status_code=404, detail="Meeting was not found.")
+    user_id = _require_user_id(token)
+    meeting = _require_owned_meeting(service_client, meeting_id, user_id)
 
     audio_storage_path = meeting.get("audio_storage_path")
 
@@ -405,6 +547,18 @@ async def transcribe_meeting(
             .delete()
             .eq("meeting_id", meeting_id)
             .execute()
+        )
+        (
+            service_client.table("participants")
+            .delete()
+            .eq("meeting_id", meeting_id)
+            .is_("email", "null")
+            .execute()
+        )
+        rows = _attach_participants_to_transcript_rows(
+            service_client,
+            meeting_id=meeting_id,
+            rows=rows,
         )
         service_client.table("transcript_segments").insert(rows).execute()
         (
@@ -446,27 +600,9 @@ async def analyze_meeting(
     authorization: str | None = Header(default=None),
 ) -> dict[str, Any]:
     token = _require_bearer_token(authorization)
-    anon_client = get_supabase_anon_client()
     service_client = get_supabase_service_client()
-
-    try:
-        user_response = anon_client.auth.get_user(token)
-        user_id = user_response.user.id
-    except Exception as exc:
-        raise HTTPException(status_code=401, detail="Invalid Supabase session.") from exc
-
-    meeting_response = (
-        service_client.table("meetings")
-        .select("id,user_id,owner_id,title,processing_status")
-        .eq("id", meeting_id)
-        .or_(f"user_id.eq.{user_id},owner_id.eq.{user_id}")
-        .limit(1)
-        .execute()
-    )
-    meeting = meeting_response.data[0] if meeting_response.data else None
-
-    if not meeting:
-        raise HTTPException(status_code=404, detail="Meeting was not found.")
+    user_id = _require_user_id(token)
+    meeting = _require_owned_meeting(service_client, meeting_id, user_id)
 
     if meeting.get("processing_status") in {"transcribing", "analyzing"}:
         raise HTTPException(status_code=409, detail="Meeting is already processing.")
@@ -547,4 +683,153 @@ async def analyze_meeting(
         "action_item_count": len(rows["action_items"]),
         "decision_count": len(rows["decisions"]),
         "question_count": len(rows["questions"]),
+    }
+
+
+@app.patch("/v1/meetings/{meeting_id}/participants/{participant_id}", tags=["speakers"])
+async def update_participant_name(
+    meeting_id: str,
+    participant_id: str,
+    payload: UpdateParticipantRequest,
+    authorization: str | None = Header(default=None),
+) -> dict[str, Any]:
+    token = _require_bearer_token(authorization)
+    service_client = get_supabase_service_client()
+    user_id = _require_user_id(token)
+    _require_owned_meeting(service_client, meeting_id, user_id)
+    display_name = payload.display_name.strip()
+
+    participant = _require_participant(
+        service_client,
+        meeting_id=meeting_id,
+        participant_id=participant_id,
+    )
+    updated = (
+        service_client.table("participants")
+        .update({"display_name": display_name})
+        .eq("id", participant["id"])
+        .eq("meeting_id", meeting_id)
+        .execute()
+    )
+
+    return {"participant": updated.data[0]}
+
+
+@app.post("/v1/meetings/{meeting_id}/participants/merge", tags=["speakers"])
+async def merge_participants(
+    meeting_id: str,
+    payload: MergeParticipantsRequest,
+    authorization: str | None = Header(default=None),
+) -> dict[str, Any]:
+    if payload.source_participant_id == payload.target_participant_id:
+        raise HTTPException(status_code=400, detail="Choose two different speakers.")
+
+    token = _require_bearer_token(authorization)
+    service_client = get_supabase_service_client()
+    user_id = _require_user_id(token)
+    _require_owned_meeting(service_client, meeting_id, user_id)
+    source = _require_participant(
+        service_client,
+        meeting_id=meeting_id,
+        participant_id=payload.source_participant_id,
+    )
+    target = _require_participant(
+        service_client,
+        meeting_id=meeting_id,
+        participant_id=payload.target_participant_id,
+    )
+
+    updated = (
+        service_client.table("transcript_segments")
+        .update(
+            {
+                "participant_id": target["id"],
+                "speaker_label": target.get("speaker_label") or target["display_name"],
+            }
+        )
+        .eq("meeting_id", meeting_id)
+        .eq("participant_id", source["id"])
+        .execute()
+    )
+    (
+        service_client.table("participants")
+        .delete()
+        .eq("id", source["id"])
+        .eq("meeting_id", meeting_id)
+        .execute()
+    )
+
+    return {
+        "target_participant_id": target["id"],
+        "merged_participant_id": source["id"],
+        "updated_segment_count": len(updated.data or []),
+    }
+
+
+@app.post("/v1/meetings/{meeting_id}/transcript-segments/assign", tags=["speakers"])
+async def assign_transcript_segments(
+    meeting_id: str,
+    payload: AssignTranscriptSegmentsRequest,
+    authorization: str | None = Header(default=None),
+) -> dict[str, Any]:
+    token = _require_bearer_token(authorization)
+    service_client = get_supabase_service_client()
+    user_id = _require_user_id(token)
+    _require_owned_meeting(service_client, meeting_id, user_id)
+    unique_segment_ids = list(dict.fromkeys(payload.segment_ids))
+
+    if payload.target_participant_id:
+        participant = _require_participant(
+            service_client,
+            meeting_id=meeting_id,
+            participant_id=payload.target_participant_id,
+        )
+    else:
+        display_name = _coerce_optional_text(payload.display_name)
+
+        if not display_name:
+            raise HTTPException(
+                status_code=400,
+                detail="Provide a target participant or a new speaker name.",
+            )
+
+        participant = _create_participant(
+            service_client,
+            meeting_id=meeting_id,
+            display_name=display_name,
+            speaker_label=display_name,
+        )
+
+    segments_response = (
+        service_client.table("transcript_segments")
+        .select("id")
+        .eq("meeting_id", meeting_id)
+        .in_("id", unique_segment_ids)
+        .execute()
+    )
+    matched_segment_ids = [segment["id"] for segment in segments_response.data or []]
+
+    if len(matched_segment_ids) != len(unique_segment_ids):
+        raise HTTPException(
+            status_code=404,
+            detail="One or more transcript segments were not found.",
+        )
+
+    updated = (
+        service_client.table("transcript_segments")
+        .update(
+            {
+                "participant_id": participant["id"],
+                "speaker_label": participant.get("speaker_label")
+                or participant["display_name"],
+            }
+        )
+        .eq("meeting_id", meeting_id)
+        .in_("id", matched_segment_ids)
+        .execute()
+    )
+
+    return {
+        "participant": participant,
+        "updated_segment_count": len(updated.data or []),
     }

@@ -2,12 +2,40 @@ import pytest
 from fastapi import HTTPException
 
 from app.main import (
+    _attach_participants_to_transcript_rows,
     _build_analysis_rows,
     _build_transcript_rows,
     _format_transcript_for_analysis,
     _normalize_analysis_payload,
     _require_bearer_token,
 )
+
+
+class FakeTable:
+    def __init__(self) -> None:
+        self.rows: list[dict[str, str]] = []
+
+    def insert(self, rows: list[dict[str, str]]) -> "FakeTable":
+        self.rows = [
+            {
+                **row,
+                "id": f"participant-{index + 1}",
+            }
+            for index, row in enumerate(rows)
+        ]
+        return self
+
+    def execute(self) -> object:
+        return type("Response", (), {"data": self.rows})()
+
+
+class FakeSupabaseClient:
+    def __init__(self) -> None:
+        self.participants = FakeTable()
+
+    def table(self, table_name: str) -> FakeTable:
+        assert table_name == "participants"
+        return self.participants
 
 
 def test_require_bearer_token_accepts_valid_header() -> None:
@@ -54,6 +82,41 @@ def test_build_transcript_rows_maps_openai_segments_to_milliseconds() -> None:
             "segment_index": 1,
         },
     ]
+
+
+def test_build_transcript_rows_preserves_provider_speaker_label() -> None:
+    rows = _build_transcript_rows(
+        meeting_id="meeting-id",
+        transcription={
+            "segments": [
+                {"start": 0, "end": 1, "text": "Hello.", "speaker_label": "spk_0"}
+            ]
+        },
+        duration_seconds=12,
+    )
+
+    assert rows[0]["speaker_label"] == "spk_0"
+
+
+def test_attach_participants_assigns_fallback_speaker() -> None:
+    rows = _attach_participants_to_transcript_rows(
+        FakeSupabaseClient(),
+        meeting_id="meeting-id",
+        rows=[
+            {
+                "meeting_id": "meeting-id",
+                "speaker_label": None,
+                "start_ms": 0,
+                "end_ms": 1000,
+                "text": "Hello.",
+                "confidence": None,
+                "segment_index": 0,
+            }
+        ],
+    )
+
+    assert rows[0]["speaker_label"] == "Speaker 1"
+    assert rows[0]["participant_id"] == "participant-1"
 
 
 def test_build_transcript_rows_falls_back_to_single_text_segment() -> None:

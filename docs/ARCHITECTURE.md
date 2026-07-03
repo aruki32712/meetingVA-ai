@@ -55,6 +55,13 @@ Row-level security should enforce owner-scoped access through Supabase Auth.
 Application tables should keep source references wherever AI-generated records
 come from transcript segments.
 
+Speaker intelligence stores editable speakers in `participants` and links
+transcript ownership through `transcript_segments.participant_id`. The
+`speaker_label` field remains available as the provider or diarization label,
+while `participants.display_name` is the user-facing name. Participant metadata
+includes non-biometric reference fields for future diarization or voiceprint
+systems; voice biometric recognition is not implemented.
+
 The dashboard progress tracker stores user-owned project planning state in:
 
 - `project_progress_phases`
@@ -105,7 +112,8 @@ signed URLs where needed.
    service role key, and sends it to OpenAI transcription.
 6. Transcription produces timestamped transcript segments in
    `transcript_segments`.
-7. Speaker identification links transcript segments to speakers or participants.
+7. Speaker identification creates or reuses participant records and links
+   transcript segments through `participant_id`.
 8. AI extraction generates summaries, action items, decisions, and questions.
 9. Extracted records are stored with source transcript references.
 10. The frontend updates progress and shows reviewable results.
@@ -134,6 +142,9 @@ Planned backend endpoints:
 - `POST /v1/meetings/{meeting_id}/uploads`
 - `POST /v1/meetings/{meeting_id}/transcribe`
 - `POST /v1/meetings/{meeting_id}/process`
+- `PATCH /v1/meetings/{meeting_id}/participants/{participant_id}`
+- `POST /v1/meetings/{meeting_id}/participants/merge`
+- `POST /v1/meetings/{meeting_id}/transcript-segments/assign`
 - `GET /v1/meetings/{meeting_id}/progress`
 - `GET /v1/meetings/{meeting_id}/transcript`
 - `PATCH /v1/transcript-segments/{segment_id}`

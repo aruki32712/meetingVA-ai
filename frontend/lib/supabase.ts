@@ -147,6 +147,56 @@ type Database = {
           }
         ];
       };
+      participants: {
+        Row: {
+          id: string;
+          meeting_id: string;
+          display_name: string;
+          email: string | null;
+          role: string | null;
+          speaker_label: string | null;
+          source: string;
+          voiceprint_ref: string | null;
+          metadata: Record<string, unknown>;
+          created_at: string;
+          updated_at: string;
+        };
+        Insert: {
+          id?: string;
+          meeting_id: string;
+          display_name: string;
+          email?: string | null;
+          role?: string | null;
+          speaker_label?: string | null;
+          source?: string;
+          voiceprint_ref?: string | null;
+          metadata?: Record<string, unknown>;
+          created_at?: string;
+          updated_at?: string;
+        };
+        Update: {
+          id?: string;
+          meeting_id?: string;
+          display_name?: string;
+          email?: string | null;
+          role?: string | null;
+          speaker_label?: string | null;
+          source?: string;
+          voiceprint_ref?: string | null;
+          metadata?: Record<string, unknown>;
+          created_at?: string;
+          updated_at?: string;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "participants_meeting_id_fkey";
+            columns: ["meeting_id"];
+            isOneToOne: false;
+            referencedRelation: "meetings";
+            referencedColumns: ["id"];
+          }
+        ];
+      };
       transcript_segments: {
         Row: {
           id: string;

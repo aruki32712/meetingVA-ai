@@ -20,11 +20,19 @@ type MeetingDetailRow = {
 
 type TranscriptSegment = {
   id: string;
+  participant_id: string | null;
   speaker_label: string | null;
   start_ms: number;
   end_ms: number;
   text: string;
   segment_index: number;
+};
+
+type Participant = {
+  id: string;
+  display_name: string;
+  speaker_label: string | null;
+  created_at: string;
 };
 
 type ActionItem = {
@@ -59,11 +67,35 @@ function formatTranscriptTime(milliseconds: number) {
   return `${minutes}:${seconds.toString().padStart(2, "0")}`;
 }
 
+function formatSpeakingTime(milliseconds: number) {
+  const totalSeconds = Math.max(0, Math.round(milliseconds / 1000));
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+
+  if (minutes === 0) {
+    return `${seconds}s`;
+  }
+
+  return `${minutes}m ${seconds.toString().padStart(2, "0")}s`;
+}
+
+function fallbackSpeakerName(index: number) {
+  return `Speaker ${index + 1}`;
+}
+
 export function MeetingDetail({ meetingId }: { meetingId: string }) {
   const [meeting, setMeeting] = useState<MeetingDetailRow | null>(null);
   const [transcriptSegments, setTranscriptSegments] = useState<
     TranscriptSegment[]
   >([]);
+  const [participants, setParticipants] = useState<Participant[]>([]);
+  const [participantNameDrafts, setParticipantNameDrafts] = useState<
+    Record<string, string>
+  >({});
+  const [mergeTargets, setMergeTargets] = useState<Record<string, string>>({});
+  const [segmentAssignTargets, setSegmentAssignTargets] = useState<
+    Record<string, string>
+  >({});
   const [actionItems, setActionItems] = useState<ActionItem[]>([]);
   const [decisions, setDecisions] = useState<Decision[]>([]);
   const [questions, setQuestions] = useState<Question[]>([]);
@@ -74,6 +106,8 @@ export function MeetingDetail({ meetingId }: { meetingId: string }) {
   const [error, setError] = useState("");
   const [transcriptionError, setTranscriptionError] = useState("");
   const [analysisError, setAnalysisError] = useState("");
+  const [speakerError, setSpeakerError] = useState("");
+  const [isSavingSpeaker, setIsSavingSpeaker] = useState(false);
 
   const loadMeeting = useCallback(async () => {
     const supabase = createBrowserSupabaseClient();
@@ -91,12 +125,22 @@ export function MeetingDetail({ meetingId }: { meetingId: string }) {
 
     const { data: segments, error: transcriptError } = await supabase
       .from("transcript_segments")
-      .select("id,speaker_label,start_ms,end_ms,text,segment_index")
+      .select("id,participant_id,speaker_label,start_ms,end_ms,text,segment_index")
       .eq("meeting_id", meetingId)
       .order("segment_index", { ascending: true });
 
     if (transcriptError) {
       throw transcriptError;
+    }
+
+    const { data: participantRows, error: participantError } = await supabase
+      .from("participants")
+      .select("id,display_name,speaker_label,created_at")
+      .eq("meeting_id", meetingId)
+      .order("created_at", { ascending: true });
+
+    if (participantError) {
+      throw participantError;
     }
 
     const { data: actionItemRows, error: actionItemError } = await supabase
@@ -148,11 +192,50 @@ export function MeetingDetail({ meetingId }: { meetingId: string }) {
       meeting: data,
       audioUrl: signedAudioUrl,
       transcriptSegments: segments ?? [],
+      participants: participantRows ?? [],
       actionItems: actionItemRows ?? [],
       decisions: decisionRows ?? [],
       questions: questionRows ?? []
     };
   }, [meetingId]);
+
+  async function getAccessToken() {
+    const supabase = createBrowserSupabaseClient();
+    const { data: sessionData, error: sessionError } =
+      await supabase.auth.getSession();
+
+    if (sessionError) {
+      throw sessionError;
+    }
+
+    const accessToken = sessionData.session?.access_token;
+
+    if (!accessToken) {
+      throw new Error("You must be signed in to edit speakers.");
+    }
+
+    return accessToken;
+  }
+
+  async function refreshMeetingData() {
+    const result = await loadMeeting();
+
+    setMeeting(result.meeting);
+    setAudioUrl(result.audioUrl);
+    setTranscriptSegments(result.transcriptSegments);
+    setParticipants(result.participants);
+    setParticipantNameDrafts(
+      Object.fromEntries(
+        result.participants.map((participant) => [
+          participant.id,
+          participant.display_name
+        ])
+      )
+    );
+    setActionItems(result.actionItems);
+    setDecisions(result.decisions);
+    setQuestions(result.questions);
+  }
 
   useEffect(() => {
     let isMounted = true;
@@ -168,6 +251,15 @@ export function MeetingDetail({ meetingId }: { meetingId: string }) {
           setMeeting(result.meeting);
           setAudioUrl(result.audioUrl);
           setTranscriptSegments(result.transcriptSegments);
+          setParticipants(result.participants);
+          setParticipantNameDrafts(
+            Object.fromEntries(
+              result.participants.map((participant) => [
+                participant.id,
+                participant.display_name
+              ])
+            )
+          );
           setActionItems(result.actionItems);
           setDecisions(result.decisions);
           setQuestions(result.questions);
@@ -199,19 +291,7 @@ export function MeetingDetail({ meetingId }: { meetingId: string }) {
     setTranscriptionError("");
 
     try {
-      const supabase = createBrowserSupabaseClient();
-      const { data: sessionData, error: sessionError } =
-        await supabase.auth.getSession();
-
-      if (sessionError) {
-        throw sessionError;
-      }
-
-      const accessToken = sessionData.session?.access_token;
-
-      if (!accessToken) {
-        throw new Error("You must be signed in to generate a transcript.");
-      }
+      const accessToken = await getAccessToken();
 
       setMeeting((current) =>
         current ? { ...current, processing_status: "transcribing" } : current
@@ -232,13 +312,7 @@ export function MeetingDetail({ meetingId }: { meetingId: string }) {
         throw new Error(payload?.detail ?? "Unable to generate transcript.");
       }
 
-      const result = await loadMeeting();
-      setMeeting(result.meeting);
-      setAudioUrl(result.audioUrl);
-      setTranscriptSegments(result.transcriptSegments);
-      setActionItems(result.actionItems);
-      setDecisions(result.decisions);
-      setQuestions(result.questions);
+      await refreshMeetingData();
     } catch (transcribeError) {
       setMeeting((current) =>
         current
@@ -260,19 +334,7 @@ export function MeetingDetail({ meetingId }: { meetingId: string }) {
     setAnalysisError("");
 
     try {
-      const supabase = createBrowserSupabaseClient();
-      const { data: sessionData, error: sessionError } =
-        await supabase.auth.getSession();
-
-      if (sessionError) {
-        throw sessionError;
-      }
-
-      const accessToken = sessionData.session?.access_token;
-
-      if (!accessToken) {
-        throw new Error("You must be signed in to generate analysis.");
-      }
+      const accessToken = await getAccessToken();
 
       setMeeting((current) =>
         current ? { ...current, processing_status: "analyzing" } : current
@@ -293,13 +355,7 @@ export function MeetingDetail({ meetingId }: { meetingId: string }) {
         throw new Error(payload?.detail ?? "Unable to generate analysis.");
       }
 
-      const result = await loadMeeting();
-      setMeeting(result.meeting);
-      setAudioUrl(result.audioUrl);
-      setTranscriptSegments(result.transcriptSegments);
-      setActionItems(result.actionItems);
-      setDecisions(result.decisions);
-      setQuestions(result.questions);
+      await refreshMeetingData();
     } catch (analyzeError) {
       setMeeting((current) =>
         current ? { ...current, processing_status: "analysis_failed" } : current
@@ -311,6 +367,134 @@ export function MeetingDetail({ meetingId }: { meetingId: string }) {
       );
     } finally {
       setIsAnalyzing(false);
+    }
+  }
+
+  async function saveParticipantName(participantId: string) {
+    setIsSavingSpeaker(true);
+    setSpeakerError("");
+
+    try {
+      const accessToken = await getAccessToken();
+      const displayName = participantNameDrafts[participantId]?.trim();
+
+      if (!displayName) {
+        throw new Error("Speaker name cannot be empty.");
+      }
+
+      const response = await fetch(
+        `${apiBaseUrl}/v1/meetings/${meetingId}/participants/${participantId}`,
+        {
+          method: "PATCH",
+          headers: {
+            Authorization: `Bearer ${accessToken}`,
+            "Content-Type": "application/json"
+          },
+          body: JSON.stringify({ display_name: displayName })
+        }
+      );
+
+      if (!response.ok) {
+        const payload = await response.json().catch(() => null);
+        throw new Error(payload?.detail ?? "Unable to rename speaker.");
+      }
+
+      await refreshMeetingData();
+    } catch (renameError) {
+      setSpeakerError(
+        renameError instanceof Error
+          ? renameError.message
+          : "Unable to rename speaker."
+      );
+    } finally {
+      setIsSavingSpeaker(false);
+    }
+  }
+
+  async function mergeParticipant(participantId: string) {
+    setIsSavingSpeaker(true);
+    setSpeakerError("");
+
+    try {
+      const targetParticipantId = mergeTargets[participantId];
+
+      if (!targetParticipantId) {
+        throw new Error("Choose a speaker to merge into.");
+      }
+
+      const accessToken = await getAccessToken();
+      const response = await fetch(
+        `${apiBaseUrl}/v1/meetings/${meetingId}/participants/merge`,
+        {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${accessToken}`,
+            "Content-Type": "application/json"
+          },
+          body: JSON.stringify({
+            source_participant_id: participantId,
+            target_participant_id: targetParticipantId
+          })
+        }
+      );
+
+      if (!response.ok) {
+        const payload = await response.json().catch(() => null);
+        throw new Error(payload?.detail ?? "Unable to merge speakers.");
+      }
+
+      await refreshMeetingData();
+      setMergeTargets((current) => {
+        const next = { ...current };
+        delete next[participantId];
+        return next;
+      });
+    } catch (mergeError) {
+      setSpeakerError(
+        mergeError instanceof Error
+          ? mergeError.message
+          : "Unable to merge speakers."
+      );
+    } finally {
+      setIsSavingSpeaker(false);
+    }
+  }
+
+  async function assignSegment(segmentId: string, participantId: string) {
+    setIsSavingSpeaker(true);
+    setSpeakerError("");
+
+    try {
+      const accessToken = await getAccessToken();
+      const response = await fetch(
+        `${apiBaseUrl}/v1/meetings/${meetingId}/transcript-segments/assign`,
+        {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${accessToken}`,
+            "Content-Type": "application/json"
+          },
+          body: JSON.stringify({
+            segment_ids: [segmentId],
+            target_participant_id: participantId
+          })
+        }
+      );
+
+      if (!response.ok) {
+        const payload = await response.json().catch(() => null);
+        throw new Error(payload?.detail ?? "Unable to assign transcript segment.");
+      }
+
+      await refreshMeetingData();
+    } catch (assignError) {
+      setSpeakerError(
+        assignError instanceof Error
+          ? assignError.message
+          : "Unable to assign transcript segment."
+      );
+    } finally {
+      setIsSavingSpeaker(false);
     }
   }
 
@@ -336,6 +520,49 @@ export function MeetingDetail({ meetingId }: { meetingId: string }) {
     isAnalyzing || meeting.processing_status === "analyzing";
   const canAnalyze =
     transcriptSegments.length > 0 && !isMeetingTranscribing && !isMeetingAnalyzing;
+  const participantById = new Map(
+    participants.map((participant, index) => [
+      participant.id,
+      {
+        ...participant,
+        fallbackName: fallbackSpeakerName(index)
+      }
+    ])
+  );
+  const totalSpeakingMs = transcriptSegments.reduce(
+    (sum, segment) => sum + Math.max(0, segment.end_ms - segment.start_ms),
+    0
+  );
+  const speakerStats = participants.map((participant, index) => {
+    const segments = transcriptSegments.filter(
+      (segment) => segment.participant_id === participant.id
+    );
+    const speakingMs = segments.reduce(
+      (sum, segment) => sum + Math.max(0, segment.end_ms - segment.start_ms),
+      0
+    );
+
+    return {
+      ...participant,
+      fallbackName: fallbackSpeakerName(index),
+      segmentCount: segments.length,
+      speakingMs,
+      conversationPercent:
+        totalSpeakingMs > 0 ? Math.round((speakingMs / totalSpeakingMs) * 100) : 0
+    };
+  });
+
+  function getSegmentSpeakerName(segment: TranscriptSegment) {
+    if (segment.participant_id) {
+      const participant = participantById.get(segment.participant_id);
+
+      if (participant) {
+        return participant.display_name || participant.fallbackName;
+      }
+    }
+
+    return segment.speaker_label || fallbackSpeakerName(0);
+  }
 
   return (
     <div className="flex flex-col gap-5">
@@ -472,6 +699,131 @@ export function MeetingDetail({ meetingId }: { meetingId: string }) {
       <section className="rounded-lg border border-slate-200 bg-white p-6 shadow-sm">
         <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
           <div>
+            <h3 className="text-base font-semibold text-ink">Speakers</h3>
+            <p className="mt-1 text-sm text-slate-600">
+              {speakerStats.length > 0
+                ? `${speakerStats.length} speaker${
+                    speakerStats.length === 1 ? "" : "s"
+                  } identified`
+                : "No speakers have been identified yet."}
+            </p>
+          </div>
+        </div>
+
+        {speakerError ? (
+          <div className="mt-5 rounded-lg border border-red-200 bg-red-50 p-4 text-sm text-red-700">
+            {speakerError}
+          </div>
+        ) : null}
+
+        {speakerStats.length > 0 ? (
+          <div className="mt-5 grid gap-4 lg:grid-cols-2">
+            {speakerStats.map((speaker) => (
+              <article
+                className="rounded-lg border border-slate-200 bg-slate-50 p-4"
+                key={speaker.id}
+              >
+                <div className="flex flex-col gap-3">
+                  <label
+                    className="text-xs font-medium uppercase tracking-wide text-slate-500"
+                    htmlFor={`speaker-${speaker.id}`}
+                  >
+                    {speaker.fallbackName}
+                  </label>
+                  <div className="flex flex-col gap-2 sm:flex-row">
+                    <input
+                      className="min-w-0 flex-1 rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-ink outline-none transition focus:border-signal focus:ring-2 focus:ring-blue-100"
+                      id={`speaker-${speaker.id}`}
+                      type="text"
+                      value={
+                        participantNameDrafts[speaker.id] ?? speaker.display_name
+                      }
+                      onChange={(event) =>
+                        setParticipantNameDrafts((current) => ({
+                          ...current,
+                          [speaker.id]: event.target.value
+                        }))
+                      }
+                    />
+                    <button
+                      className="rounded-md bg-signal px-4 py-2 text-sm font-medium text-white transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:bg-slate-300"
+                      type="button"
+                      disabled={isSavingSpeaker}
+                      onClick={() => saveParticipantName(speaker.id)}
+                    >
+                      Save
+                    </button>
+                  </div>
+                </div>
+
+                <dl className="mt-4 grid gap-3 sm:grid-cols-3">
+                  <div>
+                    <dt className="text-xs font-medium uppercase tracking-wide text-slate-500">
+                      Transcript
+                    </dt>
+                    <dd className="mt-1 text-sm font-semibold text-ink">
+                      {speaker.segmentCount}
+                    </dd>
+                  </div>
+                  <div>
+                    <dt className="text-xs font-medium uppercase tracking-wide text-slate-500">
+                      Time
+                    </dt>
+                    <dd className="mt-1 text-sm font-semibold text-ink">
+                      {formatSpeakingTime(speaker.speakingMs)}
+                    </dd>
+                  </div>
+                  <div>
+                    <dt className="text-xs font-medium uppercase tracking-wide text-slate-500">
+                      Share
+                    </dt>
+                    <dd className="mt-1 text-sm font-semibold text-ink">
+                      {speaker.conversationPercent}%
+                    </dd>
+                  </div>
+                </dl>
+
+                {participants.length > 1 ? (
+                  <div className="mt-4 flex flex-col gap-2 sm:flex-row">
+                    <select
+                      className="min-w-0 flex-1 rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-ink outline-none transition focus:border-signal focus:ring-2 focus:ring-blue-100"
+                      value={mergeTargets[speaker.id] ?? ""}
+                      onChange={(event) =>
+                        setMergeTargets((current) => ({
+                          ...current,
+                          [speaker.id]: event.target.value
+                        }))
+                      }
+                    >
+                      <option value="">Merge into...</option>
+                      {participants
+                        .filter((participant) => participant.id !== speaker.id)
+                        .map((participant, optionIndex) => (
+                          <option key={participant.id} value={participant.id}>
+                            {participant.display_name ||
+                              fallbackSpeakerName(optionIndex)}
+                          </option>
+                        ))}
+                    </select>
+                    <button
+                      className="rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-ink transition hover:bg-slate-100 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-400"
+                      type="button"
+                      disabled={isSavingSpeaker || !mergeTargets[speaker.id]}
+                      onClick={() => mergeParticipant(speaker.id)}
+                    >
+                      Merge
+                    </button>
+                  </div>
+                ) : null}
+              </article>
+            ))}
+          </div>
+        ) : null}
+      </section>
+
+      <section className="rounded-lg border border-slate-200 bg-white p-6 shadow-sm">
+        <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+          <div>
             <h3 className="text-base font-semibold text-ink">Transcript</h3>
             <p className="mt-1 text-sm text-slate-600">
               {isMeetingTranscribing
@@ -502,15 +854,50 @@ export function MeetingDetail({ meetingId }: { meetingId: string }) {
                   <span>{formatTranscriptTime(segment.start_ms)}</span>
                   <span>-</span>
                   <span>{formatTranscriptTime(segment.end_ms)}</span>
-                  {segment.speaker_label ? (
-                    <span className="rounded-full border border-slate-300 bg-white px-2 py-0.5 text-slate-600">
-                      {segment.speaker_label}
-                    </span>
-                  ) : null}
+                  <span className="rounded-full border border-slate-300 bg-white px-2 py-0.5 text-slate-600">
+                    {getSegmentSpeakerName(segment)}
+                  </span>
                 </div>
                 <p className="mt-2 text-sm leading-6 text-ink">
                   {segment.text}
                 </p>
+                {participants.length > 1 ? (
+                  <div className="mt-3">
+                    <label
+                      className="sr-only"
+                      htmlFor={`assign-segment-${segment.id}`}
+                    >
+                      Assign transcript segment
+                    </label>
+                    <select
+                      className="w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-ink outline-none transition focus:border-signal focus:ring-2 focus:ring-blue-100 sm:w-auto"
+                      id={`assign-segment-${segment.id}`}
+                      value={
+                        segmentAssignTargets[segment.id] ??
+                        segment.participant_id ??
+                        ""
+                      }
+                      disabled={isSavingSpeaker}
+                      onChange={(event) => {
+                        const participantId = event.target.value;
+                        setSegmentAssignTargets((current) => ({
+                          ...current,
+                          [segment.id]: participantId
+                        }));
+
+                        if (participantId) {
+                          void assignSegment(segment.id, participantId);
+                        }
+                      }}
+                    >
+                      {participants.map((participant, index) => (
+                        <option key={participant.id} value={participant.id}>
+                          {participant.display_name || fallbackSpeakerName(index)}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                ) : null}
               </article>
             ))}
           </div>

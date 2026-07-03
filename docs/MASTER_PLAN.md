@@ -116,10 +116,10 @@ docs/                         Project roadmap, architecture, and planning docs
 - [x] Action Items
 - [x] Decisions
 - [x] Questions
-- [ ] Speaker Identification
+- [x] Speaker Identification
 - [x] Meeting Detail Page
 - [ ] Transcript Editor
-- [ ] Speaker Editor
+- [x] Speaker Editor
 - [ ] Search
 - [ ] Calendar
 - [ ] Export PDF

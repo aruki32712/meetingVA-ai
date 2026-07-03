@@ -3,8 +3,8 @@
 Initial full-stack scaffold for MeetingVA AI, a meeting capture and intelligence
 application. This repository is intentionally thin right now: it provides a
 working local architecture, health checks, environment templates, Docker setup,
-dashboard progress tracking, meeting capture, AI transcription, AI meeting
-intelligence, and Supabase PostgreSQL migrations.
+dashboard progress tracking, meeting capture, AI transcription, speaker
+management, AI meeting intelligence, and Supabase PostgreSQL migrations.
 
 Project planning docs:
 
@@ -94,13 +94,22 @@ After a meeting recording is uploaded, open its meeting detail page and use
 Generate Transcript. The frontend sends the Supabase access token to the
 backend, which verifies meeting ownership, downloads the private audio object
 from Supabase Storage, sends it to OpenAI transcription, stores timestamped
-rows in `transcript_segments`, and updates `meetings.processing_status`.
+rows in `transcript_segments`, creates editable speaker rows in `participants`,
+links segments through `participant_id`, and updates
+`meetings.processing_status`.
 After transcription completes, use Generate Analysis on the same detail page.
 The backend verifies meeting ownership, sends the transcript to OpenAI, stores
 the executive summary and meeting brief on `meetings`, replaces generated
 `action_items`, `decisions`, and `questions`, and updates
 `meetings.processing_status` through `analyzing`, `analyzed`, or
 `analysis_failed`.
+
+The meeting detail page includes a Speakers section for renaming speakers,
+merging duplicate speakers, and assigning transcript segments to another
+speaker. Speaker edits use authenticated backend endpoints and are scoped to
+meetings owned by the signed-in user. The schema includes reference fields for
+future diarization or voiceprint systems, but MeetingVA AI does not store or
+compare voice biometric data.
 
 Supabase Auth should allow `http://localhost:3000` as a local site/redirect URL.
 
@@ -145,8 +154,10 @@ owner-scoped project phases and checklist items. The meeting capture migration
 adds browser-recording metadata fields and creates the private `meeting-audio`
 Storage bucket. The transcription migration adds transcript-specific processing
 statuses. The meeting intelligence migration adds meeting summary and brief
-fields plus analysis-specific processing statuses. All application migrations
-enable row-level security with Supabase Auth policies.
+fields plus analysis-specific processing statuses. The speaker intelligence
+migration adds participant metadata, speaker-label indexes, and participant
+updated timestamps. All application migrations enable row-level security with
+Supabase Auth policies.
 
 Apply it with the Supabase CLI from a linked project:
 
