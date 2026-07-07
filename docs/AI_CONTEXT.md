@@ -71,8 +71,11 @@ Walter Labs AI is the operating company context for this repository. The operati
 - Keep secrets out of git.
 - Keep Supabase service role usage backend-only.
 - Use RLS-compatible owner-scoped data access.
+- Preserve private `meeting-audio` playback through signed URLs.
+- Do not expose `SUPABASE_SERVICE_ROLE_KEY`, `SUPABASE_DATABASE_URL`, or `OPENAI_API_KEY` to frontend code.
 - Keep long-running AI work in Celery, not request handlers.
 - Preserve direct user ownership checks before backend side effects.
+- Do not claim HIPAA compliance or process PHI until formal compliance review is complete.
 - Match existing code style and file organization.
 - Add or update tests when changing backend behavior.
 - Run validation before committing.
@@ -85,4 +88,3 @@ Walter Labs AI is the operating company context for this repository. The operati
 - The in-app progress tracker seed data is stale relative to implemented features.
 - No E2E browser automation exists yet.
 - Billing, analytics, customer lifecycle tooling, and support workflows are not implemented.
-

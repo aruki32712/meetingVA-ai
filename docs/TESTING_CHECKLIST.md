@@ -22,6 +22,8 @@ Use this checklist before declaring a release or deployed test complete.
 - [ ] `meeting-attachments` private bucket exists.
 - [ ] RLS policies allow users to access only their own meetings and project progress data.
 - [ ] Service role key is present only in backend and worker environments.
+- [ ] `audit_logs` table exists after migration `0008_security_foundation.sql`.
+- [ ] Cross-user reads and writes are rejected for meetings, participants, transcripts, action items, decisions, questions, tags, and attachments.
 
 ## Frontend Smoke Test
 
@@ -80,7 +82,19 @@ Use this checklist before declaring a release or deployed test complete.
 - [ ] Render `/health` returns ok.
 - [ ] Vercel environment variables point to the correct Supabase and Render services.
 - [ ] Render backend and worker have matching Supabase, Redis, and OpenAI settings.
+- [ ] `CORS_ALLOWED_ORIGINS` contains only approved frontend origins.
+- [ ] Backend security headers are present on `/health`.
+- [ ] AI rate limiting returns `429` after configured excess requests.
 - [ ] End-to-end recording, transcription, analysis, and speaker edit workflow passes on deployed URLs.
+
+## Security And Privacy
+
+- [ ] `docs/SECURITY.md` reflects current controls.
+- [ ] `docs/SECURITY_CHECKLIST.md` is reviewed.
+- [ ] `docs/PRIVACY_POLICY_DRAFT.md` is reviewed before public launch.
+- [ ] `docs/DATA_RETENTION.md` is reviewed before public launch.
+- [ ] No HIPAA compliance claim appears in product or marketing materials.
+- [ ] Product is not used for PHI until formal compliance review is complete.
 
 ## Business Readiness
 
@@ -97,4 +111,3 @@ Use this checklist before declaring a release or deployed test complete.
 - [ ] `docs/ROADMAP.md` reflects any scope changes.
 - [ ] `docs/PROJECT_MEMORY.md` records meaningful decisions.
 - [ ] Known blockers are documented.
-

@@ -5,12 +5,15 @@ from app.main import (
     _attach_participants_to_transcript_rows,
     _build_analysis_rows,
     _build_transcript_rows,
+    _enforce_ai_rate_limit,
     _format_transcript_for_analysis,
     _is_english_language,
     _normalize_analysis_payload,
     _normalize_language,
     _require_bearer_token,
     _transcript_kind,
+    _validate_uuid,
+    ai_rate_limit_events,
 )
 
 
@@ -51,6 +54,34 @@ def test_require_bearer_token_rejects_invalid_header(header: str | None) -> None
         _require_bearer_token(header)
 
     assert exc_info.value.status_code == 401
+
+
+def test_validate_uuid_accepts_uuid() -> None:
+    assert (
+        _validate_uuid("11111111-1111-1111-1111-111111111111", "meeting_id")
+        == "11111111-1111-1111-1111-111111111111"
+    )
+
+
+def test_validate_uuid_rejects_invalid_value() -> None:
+    with pytest.raises(HTTPException) as exc_info:
+        _validate_uuid("not-a-uuid", "meeting_id")
+
+    assert exc_info.value.status_code == 422
+
+
+def test_ai_rate_limit_rejects_excess_requests(monkeypatch: pytest.MonkeyPatch) -> None:
+    ai_rate_limit_events.clear()
+    monkeypatch.setattr("app.main.settings.ai_rate_limit_requests", 2)
+    monkeypatch.setattr("app.main.settings.ai_rate_limit_window_seconds", 60)
+
+    _enforce_ai_rate_limit("user-id", "transcribe")
+    _enforce_ai_rate_limit("user-id", "transcribe")
+
+    with pytest.raises(HTTPException) as exc_info:
+        _enforce_ai_rate_limit("user-id", "transcribe")
+
+    assert exc_info.value.status_code == 429
 
 
 def test_build_transcript_rows_maps_openai_segments_to_milliseconds() -> None:

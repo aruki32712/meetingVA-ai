@@ -1,17 +1,26 @@
 import json
+import logging
 import re
+import time
+from collections import defaultdict, deque
 from pathlib import Path
 from typing import Any
+from uuid import UUID
 
 import httpx
-from fastapi import FastAPI, Header, HTTPException
+from fastapi import FastAPI, Header, HTTPException, Request
+from fastapi.exception_handlers import http_exception_handler
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel, Field, field_validator
 
 from app.supabase_client import get_supabase_anon_client, get_supabase_service_client
 from app.settings import get_settings
 
 settings = get_settings()
+logger = logging.getLogger(__name__)
+RateLimitKey = tuple[str, str]
+ai_rate_limit_events: dict[RateLimitKey, deque[float]] = defaultdict(deque)
 
 app = FastAPI(
     title=settings.app_name,
@@ -21,11 +30,51 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[settings.frontend_url],
+    allow_origins=settings.allowed_cors_origins,
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "PATCH", "OPTIONS"],
+    allow_headers=["Authorization", "Content-Type"],
 )
+
+
+@app.middleware("http")
+async def add_security_headers(request: Request, call_next: Any) -> Response:
+    response = await call_next(request)
+    response.headers.setdefault("X-Content-Type-Options", "nosniff")
+    response.headers.setdefault("X-Frame-Options", "DENY")
+    response.headers.setdefault("Referrer-Policy", "no-referrer")
+    response.headers.setdefault(
+        "Permissions-Policy",
+        "microphone=(), camera=(), geolocation=()",
+    )
+
+    if request.url.scheme == "https":
+        response.headers.setdefault(
+            "Strict-Transport-Security",
+            "max-age=31536000; includeSubDomains",
+        )
+
+    return response
+
+
+@app.exception_handler(HTTPException)
+async def safe_http_exception_handler(
+    request: Request,
+    exc: HTTPException,
+) -> Response:
+    return await http_exception_handler(request, exc)
+
+
+@app.exception_handler(Exception)
+async def safe_unhandled_exception_handler(
+    request: Request,
+    exc: Exception,
+) -> JSONResponse:
+    logger.exception("Unhandled backend error for %s %s", request.method, request.url.path)
+    return JSONResponse(
+        status_code=500,
+        content={"detail": "Internal server error."},
+    )
 
 
 class UpdateParticipantRequest(BaseModel):
@@ -88,6 +137,31 @@ def _require_configured(value: str, name: str) -> str:
         raise HTTPException(status_code=500, detail=f"Missing server setting: {name}")
 
     return value
+
+
+def _validate_uuid(value: str, field_name: str) -> str:
+    try:
+        return str(UUID(value))
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=f"Invalid {field_name}.") from exc
+
+
+def _enforce_ai_rate_limit(user_id: str, action: str) -> None:
+    limit = max(1, settings.ai_rate_limit_requests)
+    window_seconds = max(1, settings.ai_rate_limit_window_seconds)
+    now = time.monotonic()
+    events = ai_rate_limit_events[(user_id, action)]
+
+    while events and now - events[0] >= window_seconds:
+        events.popleft()
+
+    if len(events) >= limit:
+        raise HTTPException(
+            status_code=429,
+            detail="Too many AI requests. Please wait before trying again.",
+        )
+
+    events.append(now)
 
 
 def _coerce_segment_timestamp(value: Any) -> int:
@@ -879,9 +953,11 @@ async def transcribe_meeting(
     payload: TranscribeMeetingRequest | None = None,
     authorization: str | None = Header(default=None),
 ) -> dict[str, Any]:
+    meeting_id = _validate_uuid(meeting_id, "meeting_id")
     token = _require_bearer_token(authorization)
     service_client = get_supabase_service_client()
     user_id = _require_user_id(token)
+    _enforce_ai_rate_limit(user_id, "transcribe")
     meeting = _require_owned_meeting(service_client, meeting_id, user_id)
     _ensure_not_processing(meeting)
 
@@ -920,9 +996,11 @@ async def analyze_meeting(
     meeting_id: str,
     authorization: str | None = Header(default=None),
 ) -> dict[str, Any]:
+    meeting_id = _validate_uuid(meeting_id, "meeting_id")
     token = _require_bearer_token(authorization)
     service_client = get_supabase_service_client()
     user_id = _require_user_id(token)
+    _enforce_ai_rate_limit(user_id, "analyze")
     meeting = _require_owned_meeting(service_client, meeting_id, user_id)
     _ensure_not_processing(meeting)
 
@@ -963,6 +1041,7 @@ async def get_meeting_job_status(
     job_id: str,
     authorization: str | None = Header(default=None),
 ) -> dict[str, Any]:
+    meeting_id = _validate_uuid(meeting_id, "meeting_id")
     token = _require_bearer_token(authorization)
     service_client = get_supabase_service_client()
     user_id = _require_user_id(token)
@@ -992,6 +1071,8 @@ async def update_participant_name(
     payload: UpdateParticipantRequest,
     authorization: str | None = Header(default=None),
 ) -> dict[str, Any]:
+    meeting_id = _validate_uuid(meeting_id, "meeting_id")
+    participant_id = _validate_uuid(participant_id, "participant_id")
     token = _require_bearer_token(authorization)
     service_client = get_supabase_service_client()
     user_id = _require_user_id(token)
@@ -1020,6 +1101,16 @@ async def merge_participants(
     payload: MergeParticipantsRequest,
     authorization: str | None = Header(default=None),
 ) -> dict[str, Any]:
+    meeting_id = _validate_uuid(meeting_id, "meeting_id")
+    payload.source_participant_id = _validate_uuid(
+        payload.source_participant_id,
+        "source_participant_id",
+    )
+    payload.target_participant_id = _validate_uuid(
+        payload.target_participant_id,
+        "target_participant_id",
+    )
+
     if payload.source_participant_id == payload.target_participant_id:
         raise HTTPException(status_code=400, detail="Choose two different speakers.")
 
@@ -1071,6 +1162,18 @@ async def assign_transcript_segments(
     payload: AssignTranscriptSegmentsRequest,
     authorization: str | None = Header(default=None),
 ) -> dict[str, Any]:
+    meeting_id = _validate_uuid(meeting_id, "meeting_id")
+    payload.segment_ids = [
+        _validate_uuid(segment_id, "segment_id")
+        for segment_id in payload.segment_ids
+    ]
+
+    if payload.target_participant_id:
+        payload.target_participant_id = _validate_uuid(
+            payload.target_participant_id,
+            "target_participant_id",
+        )
+
     token = _require_bearer_token(authorization)
     service_client = get_supabase_service_client()
     user_id = _require_user_id(token)

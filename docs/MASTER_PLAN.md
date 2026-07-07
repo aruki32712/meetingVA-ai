@@ -21,6 +21,9 @@ find the supporting evidence.
 - Support uploaded audio for meetings recorded elsewhere.
 - Store meeting metadata, audio attachments, transcript segments, extracted
   insights, and exports in a secure user-owned data model.
+- Protect meeting recordings, transcripts, summaries, users, and AI-generated
+  data with RLS, private storage, backend-only secrets, safe API handling, and
+  clear privacy boundaries.
 - Support multilingual transcription in the MVP while keeping summaries,
   analysis, and the app UI in English for now.
 - Provide clear progress feedback while recordings, uploads, transcription, and
@@ -73,6 +76,7 @@ docs/                         Project roadmap, architecture, and planning docs
 - Action items
 - Decisions
 - Questions
+- Security foundation
 - Deployment-ready local architecture
 
 ## Version 1.1 Scope
@@ -94,6 +98,8 @@ docs/                         Project roadmap, architecture, and planning docs
 - Shared meeting workspaces
 - Advanced search and filtering
 - Production deployment hardening
+- Data retention enforcement
+- Audit logging workflow
 
 ## Future Ideas
 
@@ -124,6 +130,7 @@ docs/                         Project roadmap, architecture, and planning docs
 - [x] Action Items
 - [x] Decisions
 - [x] Questions
+- [x] Security Foundation
 - [x] Speaker Identification
 - [x] Meeting Detail Page
 - [ ] Transcript Editor

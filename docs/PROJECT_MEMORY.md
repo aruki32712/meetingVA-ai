@@ -44,10 +44,13 @@ The project now has many supporting docs. `PROJECT_STATUS.md` remains the author
 
 Business strategy, pricing, launch, customer, competitor, KPI, and founder dashboard docs live in `business/`. Repeatable execution lives in `playbooks/`. Technical and product implementation docs remain in `docs/`.
 
+### Add Security Foundation Before Public Launch
+
+Meeting recordings, transcripts, summaries, and AI outputs are sensitive by default. The security foundation reasserts Supabase RLS, keeps audio buckets private, adds an audit log table, makes backend CORS origin-based, adds security headers, validates UUID path inputs, rate-limits AI enqueue endpoints, and documents that HIPAA is not supported until formal compliance review is complete.
+
 ## Lessons Learned
 
 - Git history includes accidental `.env` commits that were later removed. Continue treating secrets as dashboard-only values and rotate exposed credentials if they were real.
 - Docs can drift from implementation. Future feature work should update docs in the same commit as behavior changes.
 - The in-app progress tracker is product data and can drift separately from repository docs. Its defaults need a refresh after major milestones.
 - The project is viable as an MVP candidate, but release confidence depends on a deployed smoke test with real Supabase, Render, Vercel, Redis, Celery, and OpenAI services.
-

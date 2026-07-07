@@ -12,6 +12,8 @@ Start here:
 - [Roadmap](docs/ROADMAP.md): MVP, v1.1, v2.0, and future direction.
 - [Coding standards](docs/CODING_STANDARDS.md): repository conventions for future changes.
 - [Testing checklist](docs/TESTING_CHECKLIST.md): release validation checklist.
+- [Security](docs/SECURITY.md): security model, controls, secrets, RLS, storage, and HIPAA boundary.
+- [Security checklist](docs/SECURITY_CHECKLIST.md): release checklist for access control, storage, secrets, and compliance claims.
 - [Business plan](business/BUSINESS_PLAN.md): strategy, revenue model, target market, and risks.
 - [Founder dashboard](business/FOUNDER_DASHBOARD.md): CEO-level status, priorities, metrics, and risks.
 - [Playbooks](playbooks/RELEASE_PLAYBOOK.md): repeatable workflows for release, deployment, feature work, bugs, marketing, onboarding, and disaster recovery.
@@ -91,6 +93,13 @@ Required job queue values:
 - `REDIS_URL` defaults to `redis://redis:6379/0` in Docker
 - `CELERY_BROKER_URL` defaults to `redis://redis:6379/0`
 - `CELERY_RESULT_BACKEND` defaults to `redis://redis:6379/1`
+
+Security configuration:
+
+- `CORS_ALLOWED_ORIGINS` accepts a comma-separated list of allowed frontend origins.
+- `FRONTEND_URL` is still used as a fallback allowed origin.
+- `AI_RATE_LIMIT_REQUESTS` and `AI_RATE_LIMIT_WINDOW_SECONDS` control basic backend rate limiting for AI enqueue endpoints.
+- Backend-only secrets such as `SUPABASE_SERVICE_ROLE_KEY`, `SUPABASE_DATABASE_URL`, and `OPENAI_API_KEY` must never be exposed to frontend code or Vercel.
 
 See [docs/SUPABASE_SETUP.md](docs/SUPABASE_SETUP.md) for project creation,
 API key lookup, database URL setup, migrations, storage buckets,
@@ -208,8 +217,10 @@ fields plus analysis-specific processing statuses. The speaker intelligence
 migration adds participant metadata, speaker-label indexes, and participant
 updated timestamps. The multilingual transcription migration adds meeting
 language metadata, translation preference, transcript kind, and original versus
-translated segment text storage. All application migrations enable row-level
-security with Supabase Auth policies.
+translated segment text storage. The security foundation migration reasserts
+RLS, keeps meeting storage buckets private, and adds an `audit_logs` table for
+security-relevant events. All application migrations enable row-level security
+with Supabase Auth policies.
 
 Apply it with the Supabase CLI from a linked project:
 

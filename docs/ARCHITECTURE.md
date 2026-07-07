@@ -30,6 +30,9 @@ Key responsibilities:
 
 - Health and operational endpoints
 - Supabase token validation for protected API calls
+- Environment-driven CORS configuration
+- Security headers and safe unexpected-error responses
+- Basic rate limiting for AI enqueue endpoints
 - AI job enqueueing and processing-status APIs
 - Upload and processing job coordination
 - Export generation
@@ -59,6 +62,12 @@ core meeting data model:
 Row-level security should enforce owner-scoped access through Supabase Auth.
 Application tables should keep source references wherever AI-generated records
 come from transcript segments.
+
+The security foundation migration reasserts RLS on user-owned tables, keeps
+meeting storage buckets private, and creates `audit_logs` for backend-owned
+security events. Users can read only audit rows tied to their own user or
+meeting records; inserts should be performed by backend code using the service
+role.
 
 Speaker intelligence stores editable speakers in `participants` and links
 transcript ownership through `transcript_segments.participant_id`. The
@@ -102,6 +111,10 @@ The `meeting-attachments` bucket stores supporting meeting files and generated
 artifacts. Access should be mediated by Supabase Auth, row-level security, and
 signed URLs where needed.
 
+The frontend uses short-lived signed URLs for private meeting audio playback.
+The worker uses the Supabase service role key to download private audio for
+transcription; that key must remain backend-only.
+
 ## Authentication Flow
 
 1. User signs up or signs in through Supabase Auth from the frontend.
@@ -112,6 +125,22 @@ signed URLs where needed.
 5. Backend API calls include the Supabase access token.
 6. The backend validates the token before running protected workflows.
 7. Database row-level security scopes user data by `auth.uid()`.
+
+## Security Architecture
+
+Security controls are layered:
+
+- Supabase Auth establishes user identity.
+- Supabase RLS scopes direct database access to owner-owned data.
+- Backend endpoints validate bearer tokens and verify meeting ownership before side effects.
+- Private Supabase Storage buckets protect raw audio and attachments.
+- Signed URLs expose private audio playback temporarily.
+- Backend-only secrets stay out of frontend code and Vercel.
+- CORS allowed origins are configured through environment variables.
+- Backend responses include basic security headers.
+- Transcription and analysis enqueue endpoints have basic in-memory rate limiting for MVP abuse prevention.
+
+MeetingVA AI is not HIPAA compliant today. HIPAA, SOC 2, or paid enterprise compliance must not be claimed until formal review and implementation are complete.
 
 ## AI Processing Pipeline
 

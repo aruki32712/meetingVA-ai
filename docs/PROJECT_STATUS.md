@@ -22,7 +22,7 @@ This file is the single source of truth for MeetingVA AI. Future product, engine
 - MVP readiness estimate: 85%
 - Current branch: `main`
 - Production-intent remote: `origin/main`
-- Current sprint: Walter Labs AI operating system and release-readiness hardening
+- Current sprint: MeetingVA AI security foundation and release-readiness hardening
 - Product stage: functional MVP candidate, pending deployed smoke test
 - Next recommended task: update the in-app progress tracker seed data so it matches the implemented feature set, then run a deployed end-to-end smoke test on Vercel, Render, Supabase, Redis, Celery, and OpenAI.
 
@@ -46,10 +46,11 @@ This file is the single source of truth for MeetingVA AI. Future product, engine
 - Vercel frontend configuration.
 - Backend unit tests for health and transcription helpers.
 - README and operating docs for setup, architecture, deployment, testing, business strategy, launch, and recurring workflows.
+- Security foundation with RLS verification migration, private storage verification, backend CORS configuration, security headers, AI endpoint rate limiting, UUID validation, safe unexpected-error handling, and security/privacy/retention docs.
 
 ## In Progress
 
-- Walter Labs AI operating system documentation.
+- Security foundation documentation and validation.
 - Test deployment readiness.
 - Production environment configuration through Supabase, Render, and Vercel dashboards.
 
@@ -66,6 +67,9 @@ This file is the single source of truth for MeetingVA AI. Future product, engine
 - Full production deployment verification.
 - End-to-end browser tests for auth, recording, transcription, analysis, and speaker edits.
 - Product analytics, billing, and customer lifecycle instrumentation.
+- Production-grade distributed rate limiting.
+- Automated deletion, export, and data-retention enforcement.
+- Formal HIPAA/compliance review.
 
 ## Current Blockers
 
@@ -75,17 +79,18 @@ This file is the single source of truth for MeetingVA AI. Future product, engine
 - The in-app progress tracker default seed data is stale: it still marks recording, upload, and transcription as not started even though those capabilities exist in the repository.
 - No automated E2E suite currently verifies browser recording, storage upload, queued transcription, queued analysis, or speaker editing.
 - Current OpenAI calls use direct HTTP requests and require network access, valid credentials, and live service availability during runtime.
+- MeetingVA AI is not HIPAA compliant and must not process PHI until formal compliance review is complete.
 
 ## Current Sprint
 
-Goal: make the repository self-orienting for the project owner, future Codex sessions, launch planning, and repeatable operations, then prepare for a reliable deployed smoke test.
+Goal: protect meeting recordings, transcripts, summaries, users, and AI-generated data while preserving MVP behavior, then prepare for a reliable deployed smoke test.
 
 Sprint tasks:
 
-- Create or refresh the Walter Labs AI Command Center documentation set.
-- Add business strategy, pricing, go-to-market, customer, competitor, KPI, and founder dashboard docs.
-- Add playbooks for release, deployment, feature development, bug fixes, marketing, onboarding, and disaster recovery.
-- Update README so the Command Center is the first entry point.
+- Add security, security checklist, privacy policy draft, and data retention docs.
+- Verify Supabase RLS and private storage posture.
+- Add backend CORS, security headers, rate limiting, validation, and safe errors.
+- Update README and operating docs with security posture.
 - Validate linting, typechecking, frontend build, backend compile, and backend tests.
 - Commit and push the documentation update to `origin/main`.
 
@@ -99,4 +104,3 @@ When future work lands:
 4. Record important architectural decisions in `docs/PROJECT_MEMORY.md`.
 5. Update `docs/TESTING_CHECKLIST.md` if release gates changed.
 6. Update business or playbook docs when the change affects positioning, launch, pricing, support, deployment, or operations.
-

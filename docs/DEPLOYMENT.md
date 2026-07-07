@@ -103,6 +103,7 @@ Set these on both `meetingva-backend` and `meetingva-worker`:
 APP_NAME=MeetingVA AI API
 ENVIRONMENT=production
 FRONTEND_URL=https://your-vercel-app.vercel.app
+CORS_ALLOWED_ORIGINS=https://your-vercel-app.vercel.app
 SUPABASE_URL=https://your-project.supabase.co
 SUPABASE_ANON_KEY=your-supabase-anon-key
 SUPABASE_SERVICE_ROLE_KEY=your-supabase-service-role-key
@@ -113,6 +114,8 @@ OPENAI_ANALYSIS_MODEL=gpt-4o-mini
 REDIS_URL=<from Render Redis connectionString>
 CELERY_BROKER_URL=<from Render Redis connectionString>
 CELERY_RESULT_BACKEND=<from Render Redis connectionString>
+AI_RATE_LIMIT_REQUESTS=10
+AI_RATE_LIMIT_WINDOW_SECONDS=60
 ```
 
 Notes:
@@ -120,7 +123,9 @@ Notes:
 - `SUPABASE_SERVICE_ROLE_KEY`, `SUPABASE_DATABASE_URL`, and `OPENAI_API_KEY`
   are backend-only secrets.
 - `FRONTEND_URL` must exactly match the deployed Vercel origin because the
-  backend CORS middleware allows that origin.
+  backend uses it as a fallback CORS origin.
+- `CORS_ALLOWED_ORIGINS` should contain only approved frontend origins,
+  separated by commas when more than one origin is needed.
 - The Render blueprint wires Redis values automatically for new services.
 
 ## Vercel Deployment
