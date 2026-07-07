@@ -1,14 +1,28 @@
 # MeetingVA AI
 
-Initial full-stack scaffold for MeetingVA AI, a meeting capture and intelligence
-application. This repository is intentionally thin right now: it provides a
+## MeetingVA AI Command Center
+
+Start here:
+
+- [Project status](docs/PROJECT_STATUS.md): single source of truth for progress, blockers, current sprint, completion estimate, and next task.
+- [Project owner guide](docs/PROJECT_OWNER_GUIDE.md): plain-English guide to GitHub, Codex, Supabase, Docker, Redis, Celery, Render, Vercel, and OpenAI.
+- [AI context](docs/AI_CONTEXT.md): architecture and implementation guidance for future Codex sessions.
+- [Project memory](docs/PROJECT_MEMORY.md): important technical decisions and rationale.
+- [Changelog](docs/CHANGELOG.md): completed work summarized from git history.
+- [Roadmap](docs/ROADMAP.md): MVP, v1.1, v2.0, and future direction.
+- [Coding standards](docs/CODING_STANDARDS.md): repository conventions for future changes.
+- [Testing checklist](docs/TESTING_CHECKLIST.md): release validation checklist.
+
+MeetingVA AI is a meeting capture and intelligence application. It provides a
 working local architecture, health checks, environment templates, Docker setup,
 dashboard progress tracking, meeting capture, AI transcription, speaker
 management, multilingual transcription metadata, queued AI meeting
-intelligence, and Supabase PostgreSQL migrations.
+intelligence, Supabase PostgreSQL migrations, and deployment configuration for
+Vercel and Render.
 
 Project planning docs:
 
+- [Command Center status](docs/PROJECT_STATUS.md)
 - [Master plan](docs/MASTER_PLAN.md)
 - [Architecture](docs/ARCHITECTURE.md)
 - [Supabase setup](docs/SUPABASE_SETUP.md)
