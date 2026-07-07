@@ -2,40 +2,54 @@
 
 Last updated: 2026-07-07
 
-This file is the single source of truth for MeetingVA AI project progress. Update it first whenever scope, status, blockers, sprint focus, or next actions change.
+This file is the single source of truth for MeetingVA AI. Future product, engineering, business, launch, and Codex work should start here before using any other document.
+
+## Command Center
+
+- Status authority: `docs/PROJECT_STATUS.md`
+- Owner operating manual: `docs/PROJECT_OWNER_GUIDE.md`
+- Permanent AI context: `docs/AI_CONTEXT.md`
+- Technical decisions: `docs/PROJECT_MEMORY.md`
+- Product roadmap: `docs/ROADMAP.md`
+- Release validation: `docs/TESTING_CHECKLIST.md`
+- Business strategy: `business/BUSINESS_PLAN.md`
+- CEO dashboard: `business/FOUNDER_DASHBOARD.md`
+- Operating playbooks: `playbooks/`
 
 ## Current Snapshot
 
 - Overall completion estimate: 68%
 - MVP readiness estimate: 85%
 - Current branch: `main`
-- Current sprint: AI Command Center and release-readiness hardening
+- Production-intent remote: `origin/main`
+- Current sprint: Walter Labs AI operating system and release-readiness hardening
+- Product stage: functional MVP candidate, pending deployed smoke test
 - Next recommended task: update the in-app progress tracker seed data so it matches the implemented feature set, then run a deployed end-to-end smoke test on Vercel, Render, Supabase, Redis, Celery, and OpenAI.
 
 ## Completed Features Detected From Repository
 
-- Full-stack scaffold with `frontend/`, `backend/`, `docker/`, `scripts/supabase/migrations/`, `shared/`, and `docs/`.
+- Full-stack scaffold with `frontend/`, `backend/`, `docker/`, `scripts/supabase/migrations/`, `shared/`, `docs/`, `business/`, and `playbooks/`.
 - Next.js 15 App Router frontend with React, TypeScript, Tailwind CSS, health route, dashboard shell, login, signup, protected dashboard routes, meeting list, meeting detail, new meeting capture, and progress tracker.
 - FastAPI backend with health endpoint, CORS configuration, Supabase token validation, protected meeting ownership checks, transcription enqueueing, analysis enqueueing, job polling, and speaker-edit endpoints.
 - Supabase Auth integration in the frontend and backend.
 - Supabase PostgreSQL migrations for core meeting data, project progress tracking, meeting capture, transcription statuses, AI meeting intelligence, speaker intelligence, and multilingual transcription.
-- Private Supabase Storage buckets for `meeting-audio` and `meeting-attachments` via migrations.
+- Private Supabase Storage buckets for `meeting-audio` and `meeting-attachments`.
 - Browser audio recording with start, pause, resume, stop, playback, delete, metadata capture, tag parsing, upload to Supabase Storage, and meeting/attachment record creation.
 - Meetings list and meeting detail review screens.
 - Queued AI transcription pipeline using FastAPI, Celery, Redis, Supabase Storage, and OpenAI audio transcription.
 - Multilingual transcription metadata with optional English translation for non-English audio.
 - Timestamped transcript segment storage with original and translated text fields.
-- AI meeting analysis pipeline that generates executive summary, brief, action items, decisions, and open questions.
+- AI meeting analysis pipeline that generates executive summary, meeting brief, action items, decisions, and open questions.
 - Speaker intelligence foundation with participant records, segment assignment, speaker rename, speaker merge, and per-speaker stats in the UI.
 - Docker local runtime with frontend, backend, Redis, and worker services.
 - Render blueprint for backend, worker, and Redis.
 - Vercel frontend configuration.
 - Backend unit tests for health and transcription helpers.
-- README and planning docs for setup, architecture, deployment, Supabase, and testing.
+- README and operating docs for setup, architecture, deployment, testing, business strategy, launch, and recurring workflows.
 
 ## In Progress
 
-- Command Center documentation system.
+- Walter Labs AI operating system documentation.
 - Test deployment readiness.
 - Production environment configuration through Supabase, Render, and Vercel dashboards.
 
@@ -51,6 +65,7 @@ This file is the single source of truth for MeetingVA AI project progress. Updat
 - Mobile support.
 - Full production deployment verification.
 - End-to-end browser tests for auth, recording, transcription, analysis, and speaker edits.
+- Product analytics, billing, and customer lifecycle instrumentation.
 
 ## Current Blockers
 
@@ -63,21 +78,18 @@ This file is the single source of truth for MeetingVA AI project progress. Updat
 
 ## Current Sprint
 
-Goal: make the repository self-orienting for the project owner and future Codex sessions, then prepare for a reliable deployed smoke test.
+Goal: make the repository self-orienting for the project owner, future Codex sessions, launch planning, and repeatable operations, then prepare for a reliable deployed smoke test.
 
 Sprint tasks:
 
-- Create the AI Command Center documentation set.
+- Create or refresh the Walter Labs AI Command Center documentation set.
+- Add business strategy, pricing, go-to-market, customer, competitor, KPI, and founder dashboard docs.
+- Add playbooks for release, deployment, feature development, bug fixes, marketing, onboarding, and disaster recovery.
 - Update README so the Command Center is the first entry point.
-- Refresh roadmap and release checklist.
 - Validate linting, typechecking, frontend build, backend compile, and backend tests.
 - Commit and push the documentation update to `origin/main`.
 
-## Next Recommended Task
-
-Update `frontend/components/progress-tracker.tsx` default phases to match this status file. After that, run the release checklist in `docs/TESTING_CHECKLIST.md` against the deployed stack and record the results in this file.
-
-## Status Update Protocol
+## Source Of Truth Protocol
 
 When future work lands:
 
@@ -86,3 +98,5 @@ When future work lands:
 3. Add a concise entry to `docs/CHANGELOG.md`.
 4. Record important architectural decisions in `docs/PROJECT_MEMORY.md`.
 5. Update `docs/TESTING_CHECKLIST.md` if release gates changed.
+6. Update business or playbook docs when the change affects positioning, launch, pricing, support, deployment, or operations.
+

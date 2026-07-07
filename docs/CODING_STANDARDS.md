@@ -6,7 +6,8 @@
 - Match existing file structure, naming, and style.
 - Do not commit secrets or local environment files.
 - Prefer clear, boring code over clever abstractions.
-- Update docs when behavior, setup, architecture, or release steps change.
+- Update docs when behavior, setup, architecture, strategy, or release steps change.
+- Treat `docs/PROJECT_STATUS.md` as the current truth source.
 
 ## Frontend
 
@@ -17,6 +18,7 @@
 - Preserve current Tailwind utility style and visual language.
 - Surface loading, empty, success, and error states for user workflows.
 - Keep browser-only APIs inside client components.
+- Avoid adding new UI libraries without a clear product reason.
 
 ## Backend
 
@@ -27,6 +29,7 @@
 - Keep long-running work in Celery tasks.
 - Set clear `processing_status` values before and after queued work.
 - Raise useful HTTP errors without leaking secrets or provider internals.
+- Add tests for helper logic and endpoint behavior when backend behavior changes.
 
 ## Database And Supabase
 
@@ -34,13 +37,21 @@
 - Keep RLS enabled on user-owned application tables.
 - Preserve backward compatibility for existing `owner_id` and `user_id` usage unless a migration fully removes one.
 - Store files in private buckets and expose them through authenticated or signed access.
+- Document migration order and any manual dashboard setup.
+
+## AI And Privacy
+
+- Keep prompts and AI outputs structured, auditable, and failure-tolerant.
+- Preserve original transcript text when translation is requested.
+- Do not introduce biometric speaker recognition without explicit product, legal, and privacy review.
+- Avoid sending unnecessary customer data to external services.
 
 ## Tests And Validation
 
-- Add backend tests for helper logic, endpoint behavior, and failure states when feasible.
 - Run frontend lint, typecheck, and build after frontend changes.
 - Run backend compile and pytest after backend changes.
 - For deployment-related changes, run the release checklist in `docs/TESTING_CHECKLIST.md`.
+- Document any skipped validation in `docs/PROJECT_STATUS.md` and the final handoff.
 
 ## Git
 
@@ -48,3 +59,4 @@
 - Check `git status --short` before committing.
 - Do not revert unrelated user changes.
 - Use `main` as the current production-intent branch unless the owner changes the workflow.
+

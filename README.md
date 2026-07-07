@@ -1,6 +1,6 @@
 # MeetingVA AI
 
-## MeetingVA AI Command Center
+## Walter Labs AI Command Center
 
 Start here:
 
@@ -12,6 +12,9 @@ Start here:
 - [Roadmap](docs/ROADMAP.md): MVP, v1.1, v2.0, and future direction.
 - [Coding standards](docs/CODING_STANDARDS.md): repository conventions for future changes.
 - [Testing checklist](docs/TESTING_CHECKLIST.md): release validation checklist.
+- [Business plan](business/BUSINESS_PLAN.md): strategy, revenue model, target market, and risks.
+- [Founder dashboard](business/FOUNDER_DASHBOARD.md): CEO-level status, priorities, metrics, and risks.
+- [Playbooks](playbooks/RELEASE_PLAYBOOK.md): repeatable workflows for release, deployment, feature work, bugs, marketing, onboarding, and disaster recovery.
 
 MeetingVA AI is a meeting capture and intelligence application. It provides a
 working local architecture, health checks, environment templates, Docker setup,
@@ -23,6 +26,7 @@ Vercel and Render.
 Project planning docs:
 
 - [Command Center status](docs/PROJECT_STATUS.md)
+- [Executive summary](business/EXECUTIVE_SUMMARY.md)
 - [Master plan](docs/MASTER_PLAN.md)
 - [Architecture](docs/ARCHITECTURE.md)
 - [Supabase setup](docs/SUPABASE_SETUP.md)

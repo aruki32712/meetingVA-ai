@@ -23,12 +23,14 @@ Included:
 - Basic speaker review with rename, merge, assignment, and stats.
 - Docker local runtime.
 - Vercel and Render deployment configuration.
+- Operating documentation for owner, AI sessions, release, deployment, and launch.
 
 MVP exit criteria:
 
 - Release checklist passes locally.
 - Release checklist passes against deployed Vercel, Render, Supabase, Redis, Celery, and OpenAI services.
-- `PROJECT_STATUS.md` blockers are either resolved or accepted.
+- Progress tracker seed data matches implemented features.
+- `PROJECT_STATUS.md` blockers are resolved or explicitly accepted.
 
 ## v1.1
 
@@ -44,6 +46,8 @@ Planned:
 - Export DOCX.
 - Better failure recovery and retry controls for transcription and analysis.
 - E2E test coverage for primary workflows.
+- Product analytics for activation, processing success, and retention.
+- Beta onboarding and feedback loop.
 
 ## v2.0
 
@@ -57,10 +61,13 @@ Planned:
 - Calendar integration.
 - Recurring meeting memory.
 - Advanced search and filtering.
+- Billing and subscription management.
 - Production observability and cost monitoring.
 - Hardened deployment and backup procedures.
 
-## Future
+## Future Vision
+
+MeetingVA AI becomes the durable memory layer for knowledge-work meetings: capture what happened, preserve the source, identify decisions, route follow-up, and make meeting history searchable across people, teams, and tools.
 
 Potential directions:
 
@@ -73,3 +80,5 @@ Potential directions:
 - Automated follow-up workflows.
 - Meeting analytics and trends.
 - Additional transcription and model providers.
+- Compliance controls for regulated customers.
+

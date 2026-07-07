@@ -21,6 +21,7 @@ Use this checklist before declaring a release or deployed test complete.
 - [ ] `meeting-audio` private bucket exists.
 - [ ] `meeting-attachments` private bucket exists.
 - [ ] RLS policies allow users to access only their own meetings and project progress data.
+- [ ] Service role key is present only in backend and worker environments.
 
 ## Frontend Smoke Test
 
@@ -81,9 +82,19 @@ Use this checklist before declaring a release or deployed test complete.
 - [ ] Render backend and worker have matching Supabase, Redis, and OpenAI settings.
 - [ ] End-to-end recording, transcription, analysis, and speaker edit workflow passes on deployed URLs.
 
+## Business Readiness
+
+- [ ] Pricing page or sales motion reflects `business/PRICING.md`.
+- [ ] Launch messaging reflects `business/GO_TO_MARKET.md`.
+- [ ] KPI baseline is captured in `business/KPIS.md` or analytics tooling.
+- [ ] Known competitor positioning is still accurate enough for launch.
+- [ ] Onboarding workflow is ready for the intended customer segment.
+
 ## Release Notes
 
 - [ ] `docs/PROJECT_STATUS.md` is updated.
 - [ ] `docs/CHANGELOG.md` includes the release summary.
 - [ ] `docs/ROADMAP.md` reflects any scope changes.
+- [ ] `docs/PROJECT_MEMORY.md` records meaningful decisions.
 - [ ] Known blockers are documented.
+

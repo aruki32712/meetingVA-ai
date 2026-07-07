@@ -1,12 +1,13 @@
 # MeetingVA AI Changelog
 
-This changelog summarizes completed work from repository history. Dates reflect git commit dates.
+This changelog summarizes completed work from repository history. Dates reflect git commit dates when known.
 
 ## 2026-07-07
 
 - Created the MeetingVA AI Command Center documentation set.
-- Made `PROJECT_STATUS.md` the project progress source of truth.
+- Made `PROJECT_STATUS.md` the project source of truth.
 - Added owner guide, AI context, project memory, coding standards, release checklist, refreshed roadmap, and changelog.
+- Added the Walter Labs AI operating system with business docs and repeatable playbooks.
 - Updated README to put the Command Center first.
 
 ## 2026-07-06
@@ -48,3 +49,4 @@ This changelog summarizes completed work from repository history. Dates reflect 
 ## Initial
 
 - Created the repository and initial commit.
+
