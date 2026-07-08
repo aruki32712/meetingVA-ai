@@ -12,6 +12,7 @@ Start here:
 - [Roadmap](docs/ROADMAP.md): MVP, v1.1, v2.0, and future direction.
 - [Coding standards](docs/CODING_STANDARDS.md): repository conventions for future changes.
 - [Testing checklist](docs/TESTING_CHECKLIST.md): release validation checklist.
+- [Quality gate](docs/QUALITY_GATE.md): required definition-of-done checklist for features, releases, deployments, and future Codex tasks.
 - [Security](docs/SECURITY.md): security model, controls, secrets, RLS, storage, and HIPAA boundary.
 - [Security checklist](docs/SECURITY_CHECKLIST.md): release checklist for access control, storage, secrets, and compliance claims.
 - [Business plan](business/BUSINESS_PLAN.md): strategy, revenue model, target market, and risks.
@@ -233,6 +234,10 @@ The migration creates the private `meeting-attachments` Storage bucket if it
 does not already exist.
 
 ## Available Checks
+
+Every feature, release, deployment, and future Codex task must use
+[docs/QUALITY_GATE.md](docs/QUALITY_GATE.md). Update it whenever the
+definition of done changes.
 
 Frontend:
 

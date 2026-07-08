@@ -4,6 +4,7 @@ This changelog summarizes completed work from repository history. Dates reflect 
 
 ## 2026-07-07
 
+- Added the MeetingVA AI quality gate checklist and linked it from the command center docs.
 - Implemented the MeetingVA AI security foundation with backend hardening, RLS/storage verification migration, audit log table, security/privacy/retention docs, and release checklist updates.
 - Created the MeetingVA AI Command Center documentation set.
 - Made `PROJECT_STATUS.md` the project source of truth.

@@ -2,6 +2,10 @@
 
 Use this checklist before declaring a release or deployed test complete.
 
+`docs/QUALITY_GATE.md` is the required definition-of-done gate for features,
+releases, deployments, and future Codex tasks. Update it whenever the definition
+of done changes.
+
 ## Local Validation
 
 - [ ] `cd frontend && pnpm run lint`
@@ -109,5 +113,6 @@ Use this checklist before declaring a release or deployed test complete.
 - [ ] `docs/PROJECT_STATUS.md` is updated.
 - [ ] `docs/CHANGELOG.md` includes the release summary.
 - [ ] `docs/ROADMAP.md` reflects any scope changes.
+- [ ] `docs/QUALITY_GATE.md` is updated if the definition of done changed.
 - [ ] `docs/PROJECT_MEMORY.md` records meaningful decisions.
 - [ ] Known blockers are documented.

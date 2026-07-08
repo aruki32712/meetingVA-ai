@@ -2,6 +2,8 @@
 
 Start every future Codex session here, then read `docs/PROJECT_STATUS.md`. Treat `PROJECT_STATUS.md` as the live source of truth.
 
+Every future Codex task must check `docs/QUALITY_GATE.md` and update it if the definition of done changes.
+
 ## Product Intent
 
 MeetingVA AI records or uploads meeting audio, stores it securely, turns it into timestamped transcripts, generates structured meeting intelligence, and helps users review speakers, summaries, action items, decisions, and questions.
@@ -80,6 +82,7 @@ Walter Labs AI is the operating company context for this repository. The operati
 - Add or update tests when changing backend behavior.
 - Run validation before committing.
 - Update docs when implementation, deployment, strategy, or operating procedure changes.
+- Update `docs/QUALITY_GATE.md` whenever the definition of done changes.
 
 ## Known Gaps
 

@@ -12,6 +12,7 @@ This file is the single source of truth for MeetingVA AI. Future product, engine
 - Technical decisions: `docs/PROJECT_MEMORY.md`
 - Product roadmap: `docs/ROADMAP.md`
 - Release validation: `docs/TESTING_CHECKLIST.md`
+- Required quality gate: `docs/QUALITY_GATE.md`
 - Business strategy: `business/BUSINESS_PLAN.md`
 - CEO dashboard: `business/FOUNDER_DASHBOARD.md`
 - Operating playbooks: `playbooks/`
@@ -88,6 +89,7 @@ Goal: protect meeting recordings, transcripts, summaries, users, and AI-generate
 Sprint tasks:
 
 - Add security, security checklist, privacy policy draft, and data retention docs.
+- Add a required Quality Gate checklist for feature, release, deployment, and future Codex completion.
 - Verify Supabase RLS and private storage posture.
 - Add backend CORS, security headers, rate limiting, validation, and safe errors.
 - Update README and operating docs with security posture.
@@ -103,4 +105,5 @@ When future work lands:
 3. Add a concise entry to `docs/CHANGELOG.md`.
 4. Record important architectural decisions in `docs/PROJECT_MEMORY.md`.
 5. Update `docs/TESTING_CHECKLIST.md` if release gates changed.
-6. Update business or playbook docs when the change affects positioning, launch, pricing, support, deployment, or operations.
+6. Update `docs/QUALITY_GATE.md` if the definition of done changes.
+7. Update business or playbook docs when the change affects positioning, launch, pricing, support, deployment, or operations.
