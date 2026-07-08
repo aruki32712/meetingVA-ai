@@ -3,6 +3,8 @@ services:
     name: meetingva-redis
     plan: starter
     ipAllowList: []
+    maxmemoryPolicy: noeviction
+    persistenceMode: journal-snapshot
 
   - type: web
     name: meetingva-backend
@@ -64,6 +66,7 @@ services:
     runtime: python
     rootDir: backend
     plan: starter
+    maxShutdownDelaySeconds: 300
     buildCommand: pip install -r requirements.txt
     startCommand: celery -A app.workers.celery_app:celery_app worker --loglevel=info
     envVars:
