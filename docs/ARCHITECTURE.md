@@ -98,6 +98,14 @@ Background processing is tracked in `processing_jobs` with `meeting_id`,
 `retry_count`, and `worker_version`. RLS allows users to read only jobs for
 their own meetings; backend and worker writes use the service role.
 
+Meeting search is implemented by the `search_meetings` PostgreSQL function.
+The authenticated frontend calls it through the Supabase client. It searches
+meeting metadata, transcript segments, generated intelligence, participants,
+and tags, then returns the best ranked excerpt for each meeting. Expression
+GIN indexes support full-text matching. The function is `security invoker`,
+requires an authenticated `auth.uid()`, explicitly limits eligible rows to the
+current owner, and continues to operate under table RLS.
+
 ## Storage Architecture
 
 Supabase Storage stores meeting files and generated artifacts. PostgreSQL stores
@@ -223,7 +231,9 @@ Planned backend endpoints:
 - `PATCH /v1/transcript-segments/{segment_id}`
 - `POST /v1/meetings/{meeting_id}/exports/pdf`
 - `POST /v1/meetings/{meeting_id}/exports/docx`
-- `POST /v1/search`
+- Authenticated Supabase RPC `search_meetings`
+  - Supports text, date range, processing status, participant, and tag filters.
+  - Returns one ranked result per owned meeting with match type and excerpt.
 - `POST /v1/chat`
 
 ## Deployment Architecture

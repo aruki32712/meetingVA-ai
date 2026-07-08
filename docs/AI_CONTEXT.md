@@ -45,6 +45,9 @@ Walter Labs AI is the operating company context for this repository. The operati
 10. Meeting detail can request analysis through the same durable queue pattern.
 11. Worker calls OpenAI chat completions for structured JSON and stores summaries, action items, decisions, and questions.
 12. Speaker UI can rename speakers, merge speakers, and assign transcript segments.
+13. Search UI calls the authenticated `search_meetings` Supabase RPC, which
+    searches only the current user's RLS-visible meetings and returns ranked
+    excerpts.
 
 ## Current Backend Endpoints
 
@@ -68,6 +71,8 @@ Walter Labs AI is the operating company context for this repository. The operati
 - `transcript_segments.participant_id` links transcript rows to speakers.
 - `transcript_segments.text` is the display/analysis text.
 - `original_text` and `translated_text` preserve multilingual context when available.
+- `search_meetings` uses PostgreSQL full-text search plus `auth.uid()` ownership
+  filtering and remains subject to RLS because it is `security invoker`.
 
 ## Development Rules
 
@@ -89,7 +94,7 @@ Walter Labs AI is the operating company context for this repository. The operati
 
 ## Known Gaps
 
-- Transcript editing, search, exports, calendar, chat, sharing, teams, and mobile are not implemented.
+- Transcript editing, exports, calendar, chat, sharing, teams, and mobile are not implemented.
 - Production smoke test status is unknown until run against real deployed services.
 - The in-app progress tracker seed data is stale relative to implemented features.
 - No E2E browser automation exists yet.

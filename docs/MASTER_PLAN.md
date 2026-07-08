@@ -85,7 +85,7 @@ docs/                         Project roadmap, architecture, and planning docs
 - Transcript editor
 - Speaker editor
 - Expanded multilingual review workflows
-- Search
+- Search (implemented)
 - Export PDF
 - Export DOCX
 - Improved meeting review workflow
@@ -136,7 +136,7 @@ docs/                         Project roadmap, architecture, and planning docs
 - [x] Meeting Detail Page
 - [ ] Transcript Editor
 - [x] Speaker Editor
-- [ ] Search
+- [x] Search
 - [ ] Calendar
 - [ ] Export PDF
 - [ ] Export DOCX

@@ -470,7 +470,28 @@ type Database = {
       };
     };
     Views: Record<string, never>;
-    Functions: Record<string, never>;
+    Functions: {
+      search_meetings: {
+        Args: {
+          search_query?: string;
+          date_from?: string;
+          date_to?: string;
+          status_filter?: string;
+          participant_filter?: string;
+          tag_filter?: string;
+          result_limit?: number;
+        };
+        Returns: {
+          meeting_id: string;
+          meeting_title: string;
+          meeting_date: string;
+          processing_status: string;
+          matching_excerpt: string;
+          match_type: string;
+          rank: number;
+        }[];
+      };
+    };
     Enums: {
       attachment_kind: AttachmentKind;
       meeting_processing_status: MeetingProcessingStatus;

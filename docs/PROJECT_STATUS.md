@@ -19,13 +19,13 @@ This file is the single source of truth for MeetingVA AI. Future product, engine
 
 ## Current Snapshot
 
-- Overall completion estimate: 68%
-- MVP readiness estimate: 85%
+- Overall completion estimate: 71%
+- MVP readiness estimate: 88%
 - Current branch: `main`
 - Production-intent remote: `origin/main`
-- Current sprint: Background processing infrastructure and release-readiness hardening
+- Current sprint: Search across saved meetings
 - Product stage: functional MVP candidate, pending deployed smoke test
-- Next recommended task: apply migration `0009_background_processing_jobs.sql`, then run a deployed end-to-end smoke test on Vercel, Render, Supabase, Redis, Celery, and OpenAI.
+- Next recommended task: apply migrations through `0010_meeting_search.sql`, then run a deployed end-to-end smoke test on Vercel, Render, Supabase, Redis, Celery, and OpenAI.
 
 ## Completed Features Detected From Repository
 
@@ -42,6 +42,8 @@ This file is the single source of truth for MeetingVA AI. Future product, engine
 - Timestamped transcript segment storage with original and translated text fields.
 - AI meeting analysis pipeline that generates executive summary, meeting brief, action items, decisions, and open questions through the same background job infrastructure.
 - Speaker intelligence foundation with participant records, segment assignment, speaker rename, speaker merge, and per-speaker stats in the UI.
+- Authenticated meeting search across metadata, transcripts, generated intelligence, participants, and tags with date, status, participant, and tag filters.
+- PostgreSQL full-text search indexes and an RLS-preserving `search_meetings` database function that returns one ranked excerpt per owned meeting.
 - Docker local runtime with frontend, backend, Redis, and worker services.
 - Render blueprint for backend, worker, and Redis.
 - Vercel frontend configuration.
@@ -58,7 +60,6 @@ This file is the single source of truth for MeetingVA AI. Future product, engine
 ## Not Yet Complete
 
 - Transcript text editor.
-- Search across meetings and transcripts.
 - PDF export.
 - DOCX export.
 - Calendar integration.
@@ -84,18 +85,17 @@ This file is the single source of truth for MeetingVA AI. Future product, engine
 
 ## Current Sprint
 
-Goal: move long-running AI work behind durable asynchronous job tracking while preserving secure ownership checks and preparing for a reliable deployed smoke test.
+Goal: let authenticated users find information across their saved meetings while preserving user ownership and RLS boundaries.
 
 Sprint tasks:
 
-- Add `backend/app/workers/` with reusable Celery configuration and split transcription/analysis worker tasks.
-- Add Redis-backed Celery broker/result configuration through environment variables.
-- Add durable `processing_jobs` tracking, polling, cancellation, and retry-safe failure visibility.
-- Update Docker Compose and Render worker commands for the new worker package.
-- Update Meeting Detail UI with queued/processing/completed/failed states, duplicate request prevention, retry, cancellation, and 5-second polling.
-- Update architecture, deployment, AI context, security, and quality gate docs.
-- Validate linting, typechecking, frontend build, backend compile, and backend tests.
-- Commit and push the infrastructure update to `origin/main`.
+- Search titles, descriptions, transcripts, summaries, briefs, action items, decisions, questions, participants, and tags.
+- Filter search results by meeting date, processing status, participant, and tag.
+- Return ranked meeting-level results with safe highlighted excerpts and links to meeting detail.
+- Keep search owner-scoped through authenticated Supabase access, RLS, and explicit `auth.uid()` filtering.
+- Add PostgreSQL full-text indexes and an ordered search migration.
+- Validate linting, typechecking, frontend build, backend compile, backend tests, and quality gate checks.
+- Commit and push the update to `origin/main`.
 
 ## Source Of Truth Protocol
 

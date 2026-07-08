@@ -45,6 +45,8 @@ Every future Codex task must update this file if the definition of done changes.
 - [ ] Meeting list, meeting detail, new meeting capture, and progress tracker screens still load.
 - [ ] Long-running transcript or analysis jobs do not block the UI.
 - [ ] Loading, success, empty, and failure states remain clear.
+- [ ] Search loading, initial empty, no-results, error, and results states remain clear.
+- [ ] Search filters cover date range, processing status, participant, and tag.
 - [ ] Private audio playback still uses signed URLs.
 - [ ] No backend-only secrets are exposed through frontend code, logs, bundles, or environment variables.
 
@@ -71,6 +73,8 @@ Every future Codex task must update this file if the definition of done changes.
 - [ ] Foreign keys, indexes, and status constraints match current application usage.
 - [ ] Seed or default data matches the implemented feature set.
 - [ ] No migration weakens existing user-data isolation.
+- [ ] Search indexes cover the searchable meeting and related-record text.
+- [ ] Search RPC remains `security invoker`, requires `auth.uid()`, and returns only owned meetings.
 
 ## 6. Supabase/RLS Validation
 
@@ -135,6 +139,10 @@ Every future Codex task must update this file if the definition of done changes.
 - [ ] Generate Transcript enqueues a job and updates status.
 - [ ] Generate Analysis enqueues a job and updates status.
 - [ ] Speaker rename, merge, and segment assignment work for the meeting owner.
+- [ ] Meeting detail displays detected language, transcript language, translation status, and speaker statistics.
+- [ ] Search returns relevant excerpts and match types across all documented content types.
+- [ ] Search date, processing status, participant, and tag filters work independently and together.
+- [ ] Signed-out and cross-user search access is rejected.
 - [ ] Unauthorized users cannot access or mutate another user's meeting data.
 
 ## 11. Deployment Readiness

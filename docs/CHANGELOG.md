@@ -4,6 +4,8 @@ This changelog summarizes completed work from repository history. Dates reflect 
 
 ## 2026-07-08
 
+- Implemented authenticated search across saved meetings with PostgreSQL full-text indexing, RLS-preserving ownership checks, ranked excerpts, match types, filters, dashboard navigation, and complete search UI states.
+- Implemented speaker intelligence and multilingual transcription preparation, including participant-backed speaker editing, transcript speaker labels, translation request handling, language metadata, and meeting-level translation status.
 - Implemented background processing infrastructure with a `workers/` package, durable `processing_jobs` tracking, cancellation, 5-second frontend polling, worker tests, Docker Compose worker updates, and deployment documentation.
 
 ## 2026-07-07
