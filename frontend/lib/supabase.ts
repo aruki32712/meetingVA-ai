@@ -33,6 +33,8 @@ type MeetingProcessingStatus =
 
 type AttachmentKind = "audio" | "transcript" | "document" | "image" | "other";
 type TranscriptKind = "original" | "translated" | "both";
+type ProcessingJobType = "transcription" | "analysis";
+type ProcessingEventStatus = "pending" | "current" | "completed" | "failed";
 
 type Database = {
   public: {
@@ -158,6 +160,56 @@ type Database = {
         Relationships: [
           {
             foreignKeyName: "attachments_meeting_id_fkey";
+            columns: ["meeting_id"];
+            isOneToOne: false;
+            referencedRelation: "meetings";
+            referencedColumns: ["id"];
+          }
+        ];
+      };
+      processing_events: {
+        Row: {
+          id: string;
+          event_order: number;
+          meeting_id: string;
+          user_id: string;
+          job_id: string | null;
+          job_type: ProcessingJobType | null;
+          event_type: string;
+          status: ProcessingEventStatus;
+          message: string;
+          error_message: string | null;
+          created_at: string;
+        };
+        Insert: {
+          id?: string;
+          event_order?: never;
+          meeting_id: string;
+          user_id: string;
+          job_id?: string | null;
+          job_type?: ProcessingJobType | null;
+          event_type: string;
+          status: ProcessingEventStatus;
+          message: string;
+          error_message?: string | null;
+          created_at?: string;
+        };
+        Update: {
+          id?: string;
+          event_order?: never;
+          meeting_id?: string;
+          user_id?: string;
+          job_id?: string | null;
+          job_type?: ProcessingJobType | null;
+          event_type?: string;
+          status?: ProcessingEventStatus;
+          message?: string;
+          error_message?: string | null;
+          created_at?: string;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "processing_events_meeting_id_fkey";
             columns: ["meeting_id"];
             isOneToOne: false;
             referencedRelation: "meetings";

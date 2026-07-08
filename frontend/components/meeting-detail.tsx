@@ -21,6 +21,30 @@ type MeetingDetailRow = {
   translate_to_english: boolean;
   transcript_kind: "original" | "translated" | "both";
   tags: string[];
+  created_at: string;
+};
+
+type ProcessingEvent = {
+  id: string;
+  event_order: number;
+  job_type: "transcription" | "analysis" | null;
+  event_type: string;
+  status: "pending" | "current" | "completed" | "failed";
+  message: string;
+  error_message: string | null;
+  created_at: string;
+};
+
+type TimelineStepStatus = "pending" | "current" | "completed" | "failed";
+
+type TimelineStep = {
+  key: string;
+  label: string;
+  description: string;
+  status: TimelineStepStatus;
+  timestamp: string | null;
+  errorMessage: string | null;
+  retryType?: "transcription" | "analysis";
 };
 
 type TranscriptSegment = {
@@ -168,6 +192,172 @@ function formatProcessingStatus(status: string) {
   return status.replace("_", " ");
 }
 
+function formatTimelineTimestamp(timestamp: string | null) {
+  if (!timestamp) {
+    return null;
+  }
+
+  return new Intl.DateTimeFormat(undefined, {
+    dateStyle: "medium",
+    timeStyle: "short"
+  }).format(new Date(timestamp));
+}
+
+function buildProcessingTimeline(
+  meeting: MeetingDetailRow,
+  events: ProcessingEvent[]
+): TimelineStep[] {
+  const orderedEvents = [...events].sort((left, right) => {
+    const timeDiff =
+      new Date(left.created_at).getTime() - new Date(right.created_at).getTime();
+
+    if (timeDiff !== 0) {
+      return timeDiff;
+    }
+
+    return left.event_order - right.event_order;
+  });
+  const latest = (
+    predicate: (event: ProcessingEvent) => boolean,
+    afterEvent?: ProcessingEvent
+  ) =>
+    [...orderedEvents]
+      .reverse()
+      .find((event) => {
+        if (!predicate(event)) {
+          return false;
+        }
+
+        if (!afterEvent) {
+          return true;
+        }
+
+        const eventTime = new Date(event.created_at).getTime();
+        const afterTime = new Date(afterEvent.created_at).getTime();
+
+        return (
+          eventTime > afterTime ||
+          (eventTime === afterTime && event.event_order >= afterEvent.event_order)
+        );
+      });
+  const queued = latest((event) => event.event_type === "queued");
+  const transcriptionQueued = latest(
+    (event) => event.event_type === "queued" && event.job_type === "transcription"
+  );
+  const analysisQueued = latest(
+    (event) => event.event_type === "queued" && event.job_type === "analysis"
+  );
+  const transcriptionStarted = latest(
+    (event) => event.event_type === "transcription_started",
+    transcriptionQueued
+  );
+  const transcriptionResult = latest(
+    (event) =>
+      event.event_type === "transcription_completed" ||
+      event.event_type === "transcription_failed",
+    transcriptionQueued
+  );
+  const analysisStarted = latest(
+    (event) => event.event_type === "analysis_started",
+    analysisQueued
+  );
+  const analysisResult = latest(
+    (event) =>
+      event.event_type === "analysis_completed" ||
+      event.event_type === "analysis_failed",
+    analysisQueued
+  );
+  const uploaded = latest((event) => event.event_type === "audio_uploaded");
+  const created = latest((event) => event.event_type === "meeting_created");
+
+  const eventStatus = (
+    event: ProcessingEvent | undefined,
+    fallback: TimelineStepStatus = "pending"
+  ): TimelineStepStatus => event?.status ?? fallback;
+  const isLatestQueuedJobStartedOrSettled =
+    queued?.job_type === "transcription"
+      ? Boolean(transcriptionStarted || transcriptionResult)
+      : queued?.job_type === "analysis"
+        ? Boolean(analysisStarted || analysisResult)
+        : Boolean(transcriptionStarted || analysisStarted);
+
+  return [
+    {
+      key: "created",
+      label: "Meeting Created",
+      description: created?.message ?? "Meeting record created.",
+      status: "completed",
+      timestamp: created?.created_at ?? meeting.created_at,
+      errorMessage: null
+    },
+    {
+      key: "uploaded",
+      label: "Audio Uploaded",
+      description:
+        uploaded?.message ?? "Audio will be securely stored for processing.",
+      status: uploaded ? "completed" : "pending",
+      timestamp: uploaded?.created_at ?? null,
+      errorMessage: null
+    },
+    {
+      key: "queued",
+      label: "Queued",
+      description: queued?.message ?? "Processing will begin after a job is queued.",
+      status: queued
+        ? isLatestQueuedJobStartedOrSettled
+          ? "completed"
+          : "current"
+        : "pending",
+      timestamp: queued?.created_at ?? null,
+      errorMessage: null
+    },
+    {
+      key: "transcribing",
+      label: "Transcribing",
+      description:
+        transcriptionStarted?.message ?? "Audio will be converted into a transcript.",
+      status: transcriptionResult
+        ? "completed"
+        : eventStatus(transcriptionStarted),
+      timestamp: transcriptionStarted?.created_at ?? null,
+      errorMessage: null
+    },
+    {
+      key: "transcript-complete",
+      label: "Transcript Complete",
+      description:
+        transcriptionResult?.message ?? "The transcript will be ready for review.",
+      status: eventStatus(transcriptionResult),
+      timestamp: transcriptionResult?.created_at ?? null,
+      errorMessage: transcriptionResult?.error_message ?? null,
+      retryType:
+        transcriptionResult?.event_type === "transcription_failed"
+          ? "transcription"
+          : undefined
+    },
+    {
+      key: "analyzing",
+      label: "Analyzing",
+      description:
+        analysisStarted?.message ?? "The transcript will be analyzed for insights.",
+      status: analysisResult ? "completed" : eventStatus(analysisStarted),
+      timestamp: analysisStarted?.created_at ?? null,
+      errorMessage: null
+    },
+    {
+      key: "analysis-complete",
+      label: "Analysis Complete",
+      description:
+        analysisResult?.message ?? "Structured meeting insights will appear here.",
+      status: eventStatus(analysisResult),
+      timestamp: analysisResult?.created_at ?? null,
+      errorMessage: analysisResult?.error_message ?? null,
+      retryType:
+        analysisResult?.event_type === "analysis_failed" ? "analysis" : undefined
+    }
+  ];
+}
+
 export function MeetingDetail({ meetingId }: { meetingId: string }) {
   const [meeting, setMeeting] = useState<MeetingDetailRow | null>(null);
   const [transcriptSegments, setTranscriptSegments] = useState<
@@ -184,6 +374,7 @@ export function MeetingDetail({ meetingId }: { meetingId: string }) {
   const [actionItems, setActionItems] = useState<ActionItem[]>([]);
   const [decisions, setDecisions] = useState<Decision[]>([]);
   const [questions, setQuestions] = useState<Question[]>([]);
+  const [processingEvents, setProcessingEvents] = useState<ProcessingEvent[]>([]);
   const [audioUrl, setAudioUrl] = useState("");
   const [isLoading, setIsLoading] = useState(true);
   const [isTranscribing, setIsTranscribing] = useState(false);
@@ -205,7 +396,7 @@ export function MeetingDetail({ meetingId }: { meetingId: string }) {
     const { data, error: meetingError } = await supabase
       .from("meetings")
       .select(
-        "id,title,description,meeting_date,audio_storage_path,duration_seconds,processing_status,summary,brief,detected_language,transcript_language,translation_language,translate_to_english,transcript_kind,tags"
+        "id,title,description,meeting_date,audio_storage_path,duration_seconds,processing_status,summary,brief,detected_language,transcript_language,translation_language,translate_to_english,transcript_kind,tags,created_at"
       )
       .eq("id", meetingId)
       .single();
@@ -266,6 +457,19 @@ export function MeetingDetail({ meetingId }: { meetingId: string }) {
       throw questionError;
     }
 
+    const { data: eventRows, error: eventError } = await supabase
+      .from("processing_events")
+      .select(
+        "id,event_order,job_type,event_type,status,message,error_message,created_at"
+      )
+      .eq("meeting_id", meetingId)
+      .order("created_at", { ascending: true })
+      .order("event_order", { ascending: true });
+
+    if (eventError) {
+      throw eventError;
+    }
+
     let signedAudioUrl = "";
 
     if (data.audio_storage_path) {
@@ -288,7 +492,8 @@ export function MeetingDetail({ meetingId }: { meetingId: string }) {
       participants: participantRows ?? [],
       actionItems: actionItemRows ?? [],
       decisions: decisionRows ?? [],
-      questions: questionRows ?? []
+      questions: questionRows ?? [],
+      processingEvents: eventRows ?? []
     };
   }, [meetingId]);
 
@@ -329,6 +534,7 @@ export function MeetingDetail({ meetingId }: { meetingId: string }) {
     setActionItems(result.actionItems);
     setDecisions(result.decisions);
     setQuestions(result.questions);
+    setProcessingEvents(result.processingEvents);
   }, [loadMeeting]);
 
   useEffect(() => {
@@ -358,6 +564,7 @@ export function MeetingDetail({ meetingId }: { meetingId: string }) {
           setActionItems(result.actionItems);
           setDecisions(result.decisions);
           setQuestions(result.questions);
+          setProcessingEvents(result.processingEvents);
         }
       } catch (loadError) {
         if (isMounted) {
@@ -805,6 +1012,7 @@ export function MeetingDetail({ meetingId }: { meetingId: string }) {
         totalSpeakingMs > 0 ? Math.round((speakingMs / totalSpeakingMs) * 100) : 0
     };
   });
+  const processingTimeline = buildProcessingTimeline(meeting, processingEvents);
 
   function getSegmentSpeakerName(segment: TranscriptSegment) {
     if (segment.participant_id) {
@@ -937,6 +1145,102 @@ export function MeetingDetail({ meetingId }: { meetingId: string }) {
             ) : null}
           </div>
         ) : null}
+      </section>
+
+      <section className="rounded-lg border border-slate-200 bg-white p-6 shadow-sm">
+        <div>
+          <h3 className="text-lg font-semibold text-ink">Processing Timeline</h3>
+          <p className="mt-1 text-sm text-slate-600">
+            Follow each stage from upload through meeting intelligence.
+          </p>
+        </div>
+        <ol className="mt-6">
+          {processingTimeline.map((step, index) => {
+            const isFailed = step.status === "failed";
+            const isCurrent = step.status === "current";
+            const isCompleted = step.status === "completed";
+
+            return (
+              <li className="relative flex gap-4 pb-6 last:pb-0" key={step.key}>
+                {index < processingTimeline.length - 1 ? (
+                  <span
+                    aria-hidden="true"
+                    className={`absolute left-[0.6875rem] top-6 h-[calc(100%-0.5rem)] w-0.5 ${
+                      isCompleted ? "bg-emerald-300" : "bg-slate-200"
+                    }`}
+                  />
+                ) : null}
+                <span
+                  aria-hidden="true"
+                  className={`relative z-10 mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-full border-2 text-xs font-bold ${
+                    isFailed
+                      ? "border-red-500 bg-red-100 text-red-700"
+                      : isCurrent
+                        ? "border-blue-500 bg-blue-100 text-blue-700"
+                        : isCompleted
+                          ? "border-emerald-500 bg-emerald-100 text-emerald-700"
+                          : "border-slate-300 bg-white text-slate-400"
+                  }`}
+                >
+                  {isFailed ? "!" : isCompleted ? "✓" : index + 1}
+                </span>
+                <div
+                  className={`min-w-0 flex-1 rounded-lg border p-4 ${
+                    isFailed
+                      ? "border-red-200 bg-red-50"
+                      : isCurrent
+                        ? "border-blue-200 bg-blue-50"
+                        : "border-slate-200 bg-slate-50"
+                  }`}
+                >
+                  <div className="flex flex-wrap items-start justify-between gap-2">
+                    <div>
+                      <h4 className="text-sm font-semibold text-ink">{step.label}</h4>
+                      <p className="mt-1 text-sm text-slate-600">{step.description}</p>
+                    </div>
+                    <span
+                      className={`rounded-full px-2.5 py-1 text-xs font-semibold capitalize ${
+                        isFailed
+                          ? "bg-red-100 text-red-700"
+                          : isCurrent
+                            ? "bg-blue-100 text-blue-700"
+                            : isCompleted
+                              ? "bg-emerald-100 text-emerald-700"
+                              : "bg-slate-200 text-slate-600"
+                      }`}
+                    >
+                      {step.status}
+                    </span>
+                  </div>
+                  {formatTimelineTimestamp(step.timestamp) ? (
+                    <p className="mt-2 text-xs text-slate-500">
+                      {formatTimelineTimestamp(step.timestamp)}
+                    </p>
+                  ) : null}
+                  {step.errorMessage ? (
+                    <p className="mt-3 rounded-md border border-red-200 bg-white p-3 text-sm text-red-700">
+                      {step.errorMessage}
+                    </p>
+                  ) : null}
+                  {step.retryType ? (
+                    <button
+                      className="mt-3 rounded-md bg-red-700 px-3 py-2 text-xs font-semibold text-white transition hover:bg-red-800 disabled:cursor-not-allowed disabled:bg-slate-400"
+                      type="button"
+                      onClick={
+                        step.retryType === "transcription"
+                          ? generateTranscript
+                          : generateAnalysis
+                      }
+                      disabled={isProcessingActive || isTranscribing || isAnalyzing}
+                    >
+                      Retry {step.retryType === "transcription" ? "Transcript" : "Analysis"}
+                    </button>
+                  ) : null}
+                </div>
+              </li>
+            );
+          })}
+        </ol>
       </section>
 
       <section className="rounded-lg border border-slate-200 bg-white p-6 shadow-sm">
