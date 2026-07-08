@@ -15,6 +15,8 @@ Start here:
 - [Quality gate](docs/QUALITY_GATE.md): required definition-of-done checklist for features, releases, deployments, and future Codex tasks.
 - [Security](docs/SECURITY.md): security model, controls, secrets, RLS, storage, and HIPAA boundary.
 - [Security checklist](docs/SECURITY_CHECKLIST.md): release checklist for access control, storage, secrets, and compliance claims.
+- [Deployment guide](docs/DEPLOYMENT.md): production configuration and deployment flow for Supabase, Render, and Vercel.
+- [Production checklist](docs/PRODUCTION_CHECKLIST.md): provider-by-provider release, monitoring, and rollback gate.
 - [Business plan](business/BUSINESS_PLAN.md): strategy, revenue model, target market, and risks.
 - [Founder dashboard](business/FOUNDER_DASHBOARD.md): CEO-level status, priorities, metrics, and risks.
 - [Playbooks](playbooks/RELEASE_PLAYBOOK.md): repeatable workflows for release, deployment, feature work, bugs, marketing, onboarding, and disaster recovery.
@@ -256,3 +258,16 @@ cd backend
 python -m compileall app
 python -m pytest
 ```
+
+## Production Deployment
+
+Production uses Supabase for Auth, PostgreSQL, and private Storage; Render for
+the FastAPI backend, private Redis-compatible Key Value service, and Celery
+worker; and Vercel for the Next.js frontend. Deploy from `main`, apply all
+ordered migrations through `0012_meeting_activity_feed.sql`, and keep privileged
+Supabase and OpenAI credentials in Render only.
+
+Follow [the deployment guide](docs/DEPLOYMENT.md), then complete every item in
+the [production checklist](docs/PRODUCTION_CHECKLIST.md). A release is not
+production-ready until both health endpoints and the synthetic meeting smoke
+test pass.

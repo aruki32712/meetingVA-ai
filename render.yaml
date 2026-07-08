@@ -1,5 +1,5 @@
 services:
-  - type: redis
+  - type: keyvalue
     name: meetingva-redis
     plan: starter
     ipAllowList: []
@@ -37,19 +37,25 @@ services:
         value: whisper-1
       - key: OPENAI_ANALYSIS_MODEL
         value: gpt-4o-mini
+      - key: WORKER_VERSION
+        value: render
+      - key: AI_RATE_LIMIT_REQUESTS
+        value: 10
+      - key: AI_RATE_LIMIT_WINDOW_SECONDS
+        value: 60
       - key: REDIS_URL
         fromService:
-          type: redis
+          type: keyvalue
           name: meetingva-redis
           property: connectionString
       - key: CELERY_BROKER_URL
         fromService:
-          type: redis
+          type: keyvalue
           name: meetingva-redis
           property: connectionString
       - key: CELERY_RESULT_BACKEND
         fromService:
-          type: redis
+          type: keyvalue
           name: meetingva-redis
           property: connectionString
 
@@ -85,18 +91,20 @@ services:
         value: whisper-1
       - key: OPENAI_ANALYSIS_MODEL
         value: gpt-4o-mini
+      - key: WORKER_VERSION
+        value: render
       - key: REDIS_URL
         fromService:
-          type: redis
+          type: keyvalue
           name: meetingva-redis
           property: connectionString
       - key: CELERY_BROKER_URL
         fromService:
-          type: redis
+          type: keyvalue
           name: meetingva-redis
           property: connectionString
       - key: CELERY_RESULT_BACKEND
         fromService:
-          type: redis
+          type: keyvalue
           name: meetingva-redis
           property: connectionString

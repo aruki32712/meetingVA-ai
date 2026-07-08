@@ -4,6 +4,9 @@ This changelog summarizes completed work from repository history. Dates reflect 
 
 ## 2026-07-08
 
+- Prepared production deployment with a current Render Key Value blueprint,
+  complete environment inventory, migration order through `0012`, README
+  deployment guidance, and provider-by-provider production checklist.
 - Added a permanent meeting activity feed with owner-scoped RLS history for meeting creation, audio upload, processing lifecycle events, retries, speaker detection, and owner speaker corrections.
 - Implemented authenticated search across saved meetings with PostgreSQL full-text indexing, RLS-preserving ownership checks, ranked excerpts, match types, filters, dashboard navigation, and complete search UI states.
 - Implemented speaker intelligence and multilingual transcription preparation, including participant-backed speaker editing, transcript speaker labels, translation request handling, language metadata, and meeting-level translation status.

@@ -1,6 +1,6 @@
 # MeetingVA AI Deployment
 
-This guide prepares a test deployment with:
+This guide prepares a production deployment with:
 
 - Supabase for PostgreSQL, Auth, and Storage
 - Render for the FastAPI backend, Redis, and Celery worker
@@ -21,8 +21,8 @@ Render, and Vercel dashboards.
 
 ## Supabase Setup
 
-Create a Supabase project for the test deployment. Use a separate project from
-local development when possible.
+Create a dedicated production Supabase project. Do not reuse local or staging
+projects for production customer data.
 
 Required Supabase dashboard values:
 
@@ -51,6 +51,9 @@ Apply migrations from oldest to newest:
 7. `scripts/supabase/migrations/0007_multilingual_transcription.sql`
 8. `scripts/supabase/migrations/0008_security_foundation.sql`
 9. `scripts/supabase/migrations/0009_background_processing_jobs.sql`
+10. `scripts/supabase/migrations/0010_meeting_search.sql`
+11. `scripts/supabase/migrations/0011_processing_timeline.sql`
+12. `scripts/supabase/migrations/0012_meeting_activity_feed.sql`
 
 Preferred CLI flow:
 
@@ -78,7 +81,7 @@ and generated artifacts belong in `meeting-attachments`.
 
 `render.yaml` defines:
 
-- `meetingva-redis`: Redis broker/result backend
+- `meetingva-redis`: private Render Key Value (Redis-compatible) broker/result backend
 - `meetingva-backend`: FastAPI web service
 - `meetingva-worker`: Celery worker
 
@@ -113,6 +116,7 @@ SUPABASE_DATABASE_URL=postgresql://...
 OPENAI_API_KEY=your-openai-api-key
 OPENAI_TRANSCRIPTION_MODEL=whisper-1
 OPENAI_ANALYSIS_MODEL=gpt-4o-mini
+WORKER_VERSION=render
 REDIS_URL=<from Render Redis connectionString>
 CELERY_BROKER_URL=<from Render Redis connectionString>
 CELERY_RESULT_BACKEND=<from Render Redis connectionString>
@@ -129,6 +133,10 @@ Notes:
 - `CORS_ALLOWED_ORIGINS` should contain only approved frontend origins,
   separated by commas when more than one origin is needed.
 - The Render blueprint wires Redis values automatically for new services.
+- Render now calls new Redis-compatible instances Key Value services; the
+  blueprint uses `type: keyvalue` and keeps the instance private.
+- Configure Render deploy notifications and review backend and worker logs after
+  every production release.
 
 ## Vercel Deployment
 
@@ -140,6 +148,8 @@ Create a Vercel project with:
 - Build Command: `pnpm run build`
 
 `frontend/vercel.json` records those commands for the frontend project.
+The file must remain inside `frontend/` because Vercel treats the configured
+Root Directory as the project root.
 
 ### Vercel Environment Variables
 
@@ -155,6 +165,44 @@ NEXT_PUBLIC_SUPABASE_ANON_KEY=your-supabase-anon-key
 Only `NEXT_PUBLIC_*` values are available to browser code. Never add
 `SUPABASE_SERVICE_ROLE_KEY`, `SUPABASE_DATABASE_URL`, or `OPENAI_API_KEY` to
 Vercel.
+
+Enable Vercel deployment protection for preview deployments when available.
+Production deployments should track `main`, and the production domain must be
+added to Supabase Auth redirect URLs and Render CORS configuration.
+
+## Environment Variable Inventory
+
+Frontend/Vercel:
+
+- `NEXT_PUBLIC_APP_URL`: canonical production frontend origin.
+- `NEXT_PUBLIC_API_BASE_URL`: Render backend origin, without a trailing path.
+- `NEXT_PUBLIC_SUPABASE_URL`: public Supabase project URL.
+- `NEXT_PUBLIC_SUPABASE_ANON_KEY`: public, RLS-constrained Supabase anon key.
+
+Backend and worker/Render:
+
+- `APP_NAME`: service display name.
+- `ENVIRONMENT`: set to `production`.
+- `FRONTEND_URL`: canonical frontend origin and CORS fallback.
+- `CORS_ALLOWED_ORIGINS`: comma-separated approved frontend origins.
+- `SUPABASE_URL`: Supabase project URL.
+- `SUPABASE_ANON_KEY`: Supabase anon key used for authenticated user requests.
+- `SUPABASE_SERVICE_ROLE_KEY`: backend-only privileged key.
+- `SUPABASE_DATABASE_URL`: backend-only pooled database URL.
+- `OPENAI_API_KEY`: backend-only OpenAI API key.
+- `OPENAI_TRANSCRIPTION_MODEL`: transcription model identifier.
+- `OPENAI_ANALYSIS_MODEL`: analysis model identifier.
+- `REDIS_URL`: Redis-compatible service connection URL.
+- `CELERY_BROKER_URL`: Celery broker connection URL.
+- `CELERY_RESULT_BACKEND`: Celery result backend connection URL.
+- `WORKER_VERSION`: release identifier stored with processing jobs.
+- `AI_RATE_LIMIT_REQUESTS`: allowed enqueue requests per rate-limit window.
+- `AI_RATE_LIMIT_WINDOW_SECONDS`: rate-limit window length.
+
+All backend settings are read through `backend/app/settings.py` from environment
+variables (with `.env` supported only as a local-development convenience).
+Production secrets belong in Render, never in git, Vercel, or browser-visible
+variables.
 
 ## Health Checks
 
@@ -189,8 +237,8 @@ Expected frontend response:
 
 ## Post-Deployment Smoke Test
 
-Use a test account and a short audio recording. Avoid real customer data during
-test deployment validation.
+Use a production test account and a short synthetic audio recording. Avoid real
+customer data during deployment validation.
 
 1. Login:
    - Open `https://your-vercel-app.vercel.app/login`.
@@ -230,6 +278,14 @@ test deployment validation.
    - If transcription or analysis fails, check Render backend logs, Render
      worker logs, the `processing_jobs` row, and the meeting
      `processing_status`.
+8. Operational readiness:
+   - Confirm the activity feed and processing timeline show the completed test.
+   - Confirm frontend and backend health endpoints are monitored.
+   - Confirm a previous Render and Vercel deploy can be selected for rollback.
+   - Record the deployed commit SHA and migration level.
+
+The full release gate is in
+[`docs/PRODUCTION_CHECKLIST.md`](PRODUCTION_CHECKLIST.md).
 
 ## Available Checks
 

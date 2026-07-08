@@ -19,11 +19,11 @@ This file is the single source of truth for MeetingVA AI. Future product, engine
 
 ## Current Snapshot
 
-- Overall completion estimate: 73%
-- MVP readiness estimate: 90%
+- Overall completion estimate: 74%
+- MVP readiness estimate: 92%
 - Current branch: `main`
 - Production-intent remote: `origin/main`
-- Current sprint: Meeting history and audit visibility
+- Current sprint: Production deployment readiness
 - Product stage: functional MVP candidate, pending deployed smoke test
 - Next recommended task: apply migrations through `0012_meeting_activity_feed.sql`, then run a deployed end-to-end smoke test on Vercel, Render, Supabase, Redis, Celery, and OpenAI.
 
@@ -48,14 +48,15 @@ This file is the single source of truth for MeetingVA AI. Future product, engine
 - Docker local runtime with frontend, backend, Redis, and worker services.
 - Render blueprint for backend, worker, and Redis.
 - Vercel frontend configuration.
+- Production deployment checklist covering provider setup, secrets, health,
+  monitoring, logging, SSL, and rollback.
 - Backend unit tests for health and transcription helpers.
 - README and operating docs for setup, architecture, deployment, testing, business strategy, launch, and recurring workflows.
 - Security foundation with RLS verification migration, private storage verification, backend CORS configuration, security headers, AI endpoint rate limiting, UUID validation, safe unexpected-error handling, and security/privacy/retention docs.
 
 ## In Progress
 
-- Background processing infrastructure documentation and validation.
-- Test deployment readiness.
+- Production provider configuration and smoke-test preparation.
 - Production environment configuration through Supabase, Render, and Vercel dashboards.
 
 ## Not Yet Complete
@@ -86,15 +87,16 @@ This file is the single source of truth for MeetingVA AI. Future product, engine
 
 ## Current Sprint
 
-Goal: let authenticated users find information across their saved meetings while preserving user ownership and RLS boundaries.
+Goal: deploy the current MVP safely with complete configuration, health,
+security, monitoring, and rollback checks.
 
 Sprint tasks:
 
-- Search titles, descriptions, transcripts, summaries, briefs, action items, decisions, questions, participants, and tags.
-- Filter search results by meeting date, processing status, participant, and tag.
-- Return ranked meeting-level results with safe highlighted excerpts and links to meeting detail.
-- Keep search owner-scoped through authenticated Supabase access, RLS, and explicit `auth.uid()` filtering.
-- Add PostgreSQL full-text indexes and an ordered search migration.
+- Apply all Supabase migrations through `0012_meeting_activity_feed.sql`.
+- Configure Render backend, Key Value, and Celery worker services.
+- Configure the Vercel frontend with public-only environment variables.
+- Verify frontend and backend health endpoints.
+- Complete the production checklist and synthetic end-to-end smoke test.
 - Validate linting, typechecking, frontend build, backend compile, backend tests, and quality gate checks.
 - Commit and push the update to `origin/main`.
 
