@@ -47,6 +47,17 @@ type TimelineStep = {
   retryType?: "transcription" | "analysis";
 };
 
+type MeetingActivityEvent = {
+  id: string;
+  event_type: string;
+  actor_type: "system" | "owner" | "worker";
+  actor_label: string;
+  title: string;
+  description: string | null;
+  metadata: Record<string, unknown>;
+  created_at: string;
+};
+
 type TranscriptSegment = {
   id: string;
   participant_id: string | null;
@@ -201,6 +212,38 @@ function formatTimelineTimestamp(timestamp: string | null) {
     dateStyle: "medium",
     timeStyle: "short"
   }).format(new Date(timestamp));
+}
+
+function formatActivityTimestamp(timestamp: string) {
+  return new Intl.DateTimeFormat(undefined, {
+    dateStyle: "medium",
+    timeStyle: "short"
+  }).format(new Date(timestamp));
+}
+
+function activityMetadataText(value: unknown) {
+  if (typeof value === "string" && value.trim()) {
+    return value;
+  }
+
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return value.toString();
+  }
+
+  return null;
+}
+
+function isFailureActivity(event: MeetingActivityEvent) {
+  return event.event_type.endsWith("_failed");
+}
+
+function isSpeakerCorrectionActivity(event: MeetingActivityEvent) {
+  return [
+    "speaker_uncertain",
+    "speaker_renamed",
+    "speakers_merged",
+    "transcript_segment_reassigned"
+  ].includes(event.event_type);
 }
 
 function buildProcessingTimeline(
@@ -375,6 +418,8 @@ export function MeetingDetail({ meetingId }: { meetingId: string }) {
   const [decisions, setDecisions] = useState<Decision[]>([]);
   const [questions, setQuestions] = useState<Question[]>([]);
   const [processingEvents, setProcessingEvents] = useState<ProcessingEvent[]>([]);
+  const [activityEvents, setActivityEvents] = useState<MeetingActivityEvent[]>([]);
+  const [showOldestActivityFirst, setShowOldestActivityFirst] = useState(false);
   const [audioUrl, setAudioUrl] = useState("");
   const [isLoading, setIsLoading] = useState(true);
   const [isTranscribing, setIsTranscribing] = useState(false);
@@ -470,6 +515,18 @@ export function MeetingDetail({ meetingId }: { meetingId: string }) {
       throw eventError;
     }
 
+    const { data: activityRows, error: activityError } = await supabase
+      .from("meeting_activity_events")
+      .select(
+        "id,event_type,actor_type,actor_label,title,description,metadata,created_at"
+      )
+      .eq("meeting_id", meetingId)
+      .order("created_at", { ascending: false });
+
+    if (activityError) {
+      throw activityError;
+    }
+
     let signedAudioUrl = "";
 
     if (data.audio_storage_path) {
@@ -493,7 +550,8 @@ export function MeetingDetail({ meetingId }: { meetingId: string }) {
       actionItems: actionItemRows ?? [],
       decisions: decisionRows ?? [],
       questions: questionRows ?? [],
-      processingEvents: eventRows ?? []
+      processingEvents: eventRows ?? [],
+      activityEvents: activityRows ?? []
     };
   }, [meetingId]);
 
@@ -535,6 +593,7 @@ export function MeetingDetail({ meetingId }: { meetingId: string }) {
     setDecisions(result.decisions);
     setQuestions(result.questions);
     setProcessingEvents(result.processingEvents);
+    setActivityEvents(result.activityEvents);
   }, [loadMeeting]);
 
   useEffect(() => {
@@ -565,6 +624,7 @@ export function MeetingDetail({ meetingId }: { meetingId: string }) {
           setDecisions(result.decisions);
           setQuestions(result.questions);
           setProcessingEvents(result.processingEvents);
+          setActivityEvents(result.activityEvents);
         }
       } catch (loadError) {
         if (isMounted) {
@@ -1013,6 +1073,12 @@ export function MeetingDetail({ meetingId }: { meetingId: string }) {
     };
   });
   const processingTimeline = buildProcessingTimeline(meeting, processingEvents);
+  const sortedActivityEvents = [...activityEvents].sort((left, right) => {
+    const timeDiff =
+      new Date(left.created_at).getTime() - new Date(right.created_at).getTime();
+
+    return showOldestActivityFirst ? timeDiff : -timeDiff;
+  });
 
   function getSegmentSpeakerName(segment: TranscriptSegment) {
     if (segment.participant_id) {
@@ -1241,6 +1307,154 @@ export function MeetingDetail({ meetingId }: { meetingId: string }) {
             );
           })}
         </ol>
+      </section>
+
+      <section className="rounded-lg border border-slate-200 bg-white p-6 shadow-sm">
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+          <div>
+            <h3 className="text-lg font-semibold text-ink">Activity Feed</h3>
+            <p className="mt-1 text-sm text-slate-600">
+              Permanent meeting history, including processing events and speaker corrections.
+            </p>
+          </div>
+          <label className="flex items-center gap-2 text-sm text-slate-600">
+            <input
+              className="h-4 w-4 rounded border-slate-300 text-signal focus:ring-signal"
+              type="checkbox"
+              checked={showOldestActivityFirst}
+              onChange={(event) => setShowOldestActivityFirst(event.target.checked)}
+            />
+            Show oldest first
+          </label>
+        </div>
+
+        {sortedActivityEvents.length > 0 ? (
+          <ol className="mt-6 grid gap-3">
+            {sortedActivityEvents.map((activity) => {
+              const isFailure = isFailureActivity(activity);
+              const isSpeakerCorrection = isSpeakerCorrectionActivity(activity);
+              const originalLabel = activityMetadataText(
+                activity.metadata.original_label
+              );
+              const newLabel = activityMetadataText(activity.metadata.new_label);
+              const affectedSegmentCount = activityMetadataText(
+                activity.metadata.affected_segment_count
+              );
+              const confidenceScore = activityMetadataText(
+                activity.metadata.confidence_score
+              );
+              const errorMessage = activityMetadataText(
+                activity.metadata.error_message
+              );
+
+              return (
+                <li
+                  className={`rounded-lg border p-4 ${
+                    isFailure
+                      ? "border-red-200 bg-red-50"
+                      : isSpeakerCorrection
+                        ? "border-amber-200 bg-amber-50"
+                        : activity.actor_type === "owner"
+                          ? "border-blue-200 bg-blue-50"
+                          : "border-slate-200 bg-slate-50"
+                  }`}
+                  key={activity.id}
+                >
+                  <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+                    <div>
+                      <div className="flex flex-wrap items-center gap-2">
+                        <h4 className="text-sm font-semibold text-ink">
+                          {activity.title}
+                        </h4>
+                        <span
+                          className={`rounded-full px-2.5 py-1 text-xs font-semibold capitalize ${
+                            isFailure
+                              ? "bg-red-100 text-red-700"
+                              : isSpeakerCorrection
+                                ? "bg-amber-100 text-amber-800"
+                                : activity.actor_type === "owner"
+                                  ? "bg-blue-100 text-blue-700"
+                                  : "bg-slate-200 text-slate-700"
+                          }`}
+                        >
+                          {activity.actor_type}
+                        </span>
+                        {isFailure ? (
+                          <span className="rounded-full bg-red-700 px-2.5 py-1 text-xs font-semibold text-white">
+                            Failed
+                          </span>
+                        ) : null}
+                        {isSpeakerCorrection ? (
+                          <span className="rounded-full bg-amber-200 px-2.5 py-1 text-xs font-semibold text-amber-900">
+                            Speaker review
+                          </span>
+                        ) : null}
+                      </div>
+                      {activity.description ? (
+                        <p className="mt-1 text-sm text-slate-600">
+                          {activity.description}
+                        </p>
+                      ) : null}
+                    </div>
+                    <div className="shrink-0 text-left text-xs text-slate-500 sm:text-right">
+                      <p>{formatActivityTimestamp(activity.created_at)}</p>
+                      <p className="mt-1 font-medium">{activity.actor_label}</p>
+                    </div>
+                  </div>
+
+                  {errorMessage ? (
+                    <p className="mt-3 rounded-md border border-red-200 bg-white p-3 text-sm text-red-700">
+                      {errorMessage}
+                    </p>
+                  ) : null}
+
+                  {isSpeakerCorrection ? (
+                    <dl className="mt-3 grid gap-2 rounded-md border border-white/70 bg-white/70 p-3 text-xs text-slate-600 sm:grid-cols-2">
+                      {originalLabel ? (
+                        <div>
+                          <dt className="font-semibold uppercase tracking-wide text-slate-500">
+                            Original
+                          </dt>
+                          <dd className="mt-1 text-slate-800">{originalLabel}</dd>
+                        </div>
+                      ) : null}
+                      {newLabel ? (
+                        <div>
+                          <dt className="font-semibold uppercase tracking-wide text-slate-500">
+                            New
+                          </dt>
+                          <dd className="mt-1 text-slate-800">{newLabel}</dd>
+                        </div>
+                      ) : null}
+                      {affectedSegmentCount ? (
+                        <div>
+                          <dt className="font-semibold uppercase tracking-wide text-slate-500">
+                            Segments affected
+                          </dt>
+                          <dd className="mt-1 text-slate-800">
+                            {affectedSegmentCount}
+                          </dd>
+                        </div>
+                      ) : null}
+                      {confidenceScore ? (
+                        <div>
+                          <dt className="font-semibold uppercase tracking-wide text-slate-500">
+                            Confidence
+                          </dt>
+                          <dd className="mt-1 text-slate-800">{confidenceScore}</dd>
+                        </div>
+                      ) : null}
+                    </dl>
+                  ) : null}
+                </li>
+              );
+            })}
+          </ol>
+        ) : (
+          <div className="mt-6 rounded-lg border border-dashed border-slate-300 bg-slate-50 p-4 text-sm text-slate-600">
+            No activity has been recorded for this meeting yet.
+          </div>
+        )}
       </section>
 
       <section className="rounded-lg border border-slate-200 bg-white p-6 shadow-sm">

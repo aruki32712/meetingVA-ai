@@ -19,13 +19,13 @@ This file is the single source of truth for MeetingVA AI. Future product, engine
 
 ## Current Snapshot
 
-- Overall completion estimate: 71%
-- MVP readiness estimate: 88%
+- Overall completion estimate: 73%
+- MVP readiness estimate: 90%
 - Current branch: `main`
 - Production-intent remote: `origin/main`
-- Current sprint: Search across saved meetings
+- Current sprint: Meeting history and audit visibility
 - Product stage: functional MVP candidate, pending deployed smoke test
-- Next recommended task: apply migrations through `0010_meeting_search.sql`, then run a deployed end-to-end smoke test on Vercel, Render, Supabase, Redis, Celery, and OpenAI.
+- Next recommended task: apply migrations through `0012_meeting_activity_feed.sql`, then run a deployed end-to-end smoke test on Vercel, Render, Supabase, Redis, Celery, and OpenAI.
 
 ## Completed Features Detected From Repository
 
@@ -44,6 +44,7 @@ This file is the single source of truth for MeetingVA AI. Future product, engine
 - Speaker intelligence foundation with participant records, segment assignment, speaker rename, speaker merge, and per-speaker stats in the UI.
 - Authenticated meeting search across metadata, transcripts, generated intelligence, participants, and tags with date, status, participant, and tag filters.
 - PostgreSQL full-text search indexes and an RLS-preserving `search_meetings` database function that returns one ranked excerpt per owned meeting.
+- Permanent meeting activity feed with owner-scoped history for creation, upload, processing lifecycle, retry, speaker detection, and owner speaker corrections.
 - Docker local runtime with frontend, backend, Redis, and worker services.
 - Render blueprint for backend, worker, and Redis.
 - Vercel frontend configuration.
@@ -77,7 +78,7 @@ This file is the single source of truth for MeetingVA AI. Future product, engine
 
 - Production smoke test has not been verified against deployed Vercel, Render, Supabase, Redis, Celery, and OpenAI services.
 - Real secrets are intentionally absent from the repository, so local or deployed AI workflows require environment setup before they can run.
-- Supabase migrations must be applied in order through `0009_background_processing_jobs.sql` before the app can work in a fresh project.
+- Supabase migrations must be applied in order through `0012_meeting_activity_feed.sql` before the app can work in a fresh project.
 - The in-app progress tracker default seed data is stale: it still marks recording, upload, and transcription as not started even though those capabilities exist in the repository.
 - No automated E2E suite currently verifies browser recording, storage upload, queued transcription, queued analysis, or speaker editing.
 - Current OpenAI calls use direct HTTP requests and require network access, valid credentials, and live service availability during runtime.

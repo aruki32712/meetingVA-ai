@@ -71,6 +71,7 @@ docs/                         Project roadmap, architecture, and planning docs
 - AI transcription
 - Multilingual transcription with optional English transcript generation
 - Background AI job queue
+- Meeting processing timeline and permanent activity feed
 - Meeting detail page
 - Meeting summary
 - Action items
@@ -89,6 +90,7 @@ docs/                         Project roadmap, architecture, and planning docs
 - Export PDF
 - Export DOCX
 - Improved meeting review workflow
+- Expanded audit and owner-correction review workflows
 
 ## Version 2.0 Scope
 
@@ -127,6 +129,8 @@ docs/                         Project roadmap, architecture, and planning docs
 - [x] Multilingual Transcription
 - [x] Background AI Job Queue
 - [x] Durable Background Processing Job Tracking
+- [x] Meeting Processing Timeline
+- [x] Meeting Activity Feed
 - [x] Meeting Summary
 - [x] Action Items
 - [x] Decisions

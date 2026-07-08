@@ -47,6 +47,8 @@ Every future Codex task must update this file if the definition of done changes.
 - [ ] Loading, success, empty, and failure states remain clear.
 - [ ] Search loading, initial empty, no-results, error, and results states remain clear.
 - [ ] Search filters cover date range, processing status, participant, and tag.
+- [ ] Processing timeline and activity feed render clear current, completed, failed, system, worker, and owner states.
+- [ ] Speaker correction activity clearly shows original label, new label, confidence, and affected segment metadata when present.
 - [ ] Private audio playback still uses signed URLs.
 - [ ] No backend-only secrets are exposed through frontend code, logs, bundles, or environment variables.
 
@@ -61,6 +63,7 @@ Every future Codex task must update this file if the definition of done changes.
 - [ ] Job polling reflects current meeting processing status.
 - [ ] Cancellation endpoint moves cancellable jobs to `cancelled` safely.
 - [ ] Durable `processing_jobs` rows are created for background jobs.
+- [ ] Meeting activity events are recorded for processing lifecycle, retry, and owner speaker correction actions.
 - [ ] Expected OpenAI, Supabase, Redis, and worker failures are handled safely.
 - [ ] Unexpected errors return safe generic responses.
 
@@ -75,12 +78,15 @@ Every future Codex task must update this file if the definition of done changes.
 - [ ] No migration weakens existing user-data isolation.
 - [ ] Search indexes cover the searchable meeting and related-record text.
 - [ ] Search RPC remains `security invoker`, requires `auth.uid()`, and returns only owned meetings.
+- [ ] `meeting_activity_events` is owner-scoped, RLS-enabled, indexed by meeting/user/time, and write-restricted to trusted backend/service paths.
 
 ## 6. Supabase/RLS Validation
 
 - [ ] RLS is enabled for user-owned application tables.
 - [ ] RLS policies allow users to access only their own rows.
 - [ ] Cross-user reads and writes are rejected.
+- [ ] Users can read only activity events for their own meetings.
+- [ ] Authenticated browser clients cannot directly insert system or worker activity events.
 - [ ] `meeting-audio` bucket is private.
 - [ ] `meeting-attachments` bucket is private.
 - [ ] Private storage access uses signed URLs only for frontend playback or download.
@@ -139,6 +145,8 @@ Every future Codex task must update this file if the definition of done changes.
 - [ ] Generate Transcript enqueues a job and updates status.
 - [ ] Generate Analysis enqueues a job and updates status.
 - [ ] Speaker rename, merge, and segment assignment work for the meeting owner.
+- [ ] Activity feed records meeting creation, audio upload, queued/started/completed/failed processing, retries, speaker detection, and owner corrections.
+- [ ] Activity feed oldest-first toggle works and defaults to newest-first.
 - [ ] Meeting detail displays detected language, transcript language, translation status, and speaker statistics.
 - [ ] Search returns relevant excerpts and match types across all documented content types.
 - [ ] Search date, processing status, participant, and tag filters work independently and together.

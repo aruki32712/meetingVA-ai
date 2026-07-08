@@ -27,7 +27,9 @@ of done changes.
 - [ ] RLS policies allow users to access only their own meetings and project progress data.
 - [ ] Service role key is present only in backend and worker environments.
 - [ ] `audit_logs` table exists after migration `0008_security_foundation.sql`.
+- [ ] `meeting_activity_events` table exists after migration `0012_meeting_activity_feed.sql`.
 - [ ] Cross-user reads and writes are rejected for meetings, participants, transcripts, action items, decisions, questions, tags, and attachments.
+- [ ] Cross-user reads are rejected for meeting activity events.
 
 ## Frontend Smoke Test
 
@@ -67,6 +69,7 @@ of done changes.
 - [ ] Summary and brief are stored.
 - [ ] Action items, decisions, and questions are stored when present.
 - [ ] Meeting status changes to `analyzed`.
+- [ ] Activity feed records queued, started, completed, failed, and retry processing events.
 
 ## Speaker Review
 
@@ -74,6 +77,8 @@ of done changes.
 - [ ] Speaker merge updates transcript segments.
 - [ ] Segment assignment works.
 - [ ] Speaker stats update after changes.
+- [ ] Activity feed records speaker detection, uncertain speaker metadata when present, rename, merge, and segment assignment.
+- [ ] Activity feed defaults newest-first and the oldest-first toggle works.
 - [ ] Unauthorized users cannot edit another user's meeting speakers.
 
 ## Deployment Smoke Test

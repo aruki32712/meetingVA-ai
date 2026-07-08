@@ -358,6 +358,54 @@ def _update_meeting_status(service_client: Any, meeting_id: str, status: str) ->
     )
 
 
+def _record_meeting_activity_event(
+    service_client: Any,
+    *,
+    meeting_id: str,
+    user_id: str,
+    event_type: str,
+    actor_type: str,
+    actor_label: str,
+    title: str,
+    description: str | None = None,
+    metadata: dict[str, Any] | None = None,
+) -> None:
+    (
+        service_client.table("meeting_activity_events")
+        .insert(
+            {
+                "meeting_id": meeting_id,
+                "user_id": user_id,
+                "event_type": event_type,
+                "actor_type": actor_type,
+                "actor_label": actor_label,
+                "title": title,
+                "description": description,
+                "metadata": metadata or {},
+            }
+        )
+        .execute()
+    )
+
+
+def _has_failed_processing_job(
+    service_client: Any,
+    *,
+    meeting_id: str,
+    job_type: str,
+) -> bool:
+    response = (
+        service_client.table("processing_jobs")
+        .select("id")
+        .eq("meeting_id", meeting_id)
+        .eq("job_type", job_type)
+        .eq("status", "failed")
+        .limit(1)
+        .execute()
+    )
+    return bool(response.data)
+
+
 def _create_processing_job(
     service_client: Any,
     *,
@@ -535,6 +583,7 @@ def _create_participant(
     meeting_id: str,
     display_name: str,
     speaker_label: str | None = None,
+    source: str = "owner",
 ) -> dict[str, Any]:
     created = (
         service_client.table("participants")
@@ -543,6 +592,8 @@ def _create_participant(
                 "meeting_id": meeting_id,
                 "display_name": display_name,
                 "speaker_label": speaker_label,
+                "source": source,
+                "metadata": {"detection_method": "owner_correction"},
             }
         )
         .execute()
@@ -573,6 +624,8 @@ def _attach_participants_to_transcript_rows(
             "meeting_id": meeting_id,
             "display_name": _fallback_speaker_label(index),
             "speaker_label": label,
+            "source": "transcript",
+            "metadata": {"detection_method": "transcription_diarization"},
         }
         for index, label in enumerate(labels)
     ]
@@ -1144,6 +1197,23 @@ async def transcribe_meeting(
     if not meeting.get("audio_storage_path"):
         raise HTTPException(status_code=400, detail="Meeting has no audio file.")
 
+    if _has_failed_processing_job(
+        service_client,
+        meeting_id=meeting_id,
+        job_type="transcription",
+    ):
+        _record_meeting_activity_event(
+            service_client,
+            meeting_id=meeting_id,
+            user_id=user_id,
+            event_type="retry_started",
+            actor_type="owner",
+            actor_label="Meeting owner",
+            title="Transcription retry started",
+            description="The owner started another transcription attempt.",
+            metadata={"job_type": "transcription"},
+        )
+
     job_id = str(uuid4())
     _create_processing_job(
         service_client,
@@ -1210,6 +1280,23 @@ async def analyze_meeting(
 
     if not transcript_response.data:
         raise HTTPException(status_code=400, detail="Meeting has no transcript.")
+
+    if _has_failed_processing_job(
+        service_client,
+        meeting_id=meeting_id,
+        job_type="analysis",
+    ):
+        _record_meeting_activity_event(
+            service_client,
+            meeting_id=meeting_id,
+            user_id=user_id,
+            event_type="retry_started",
+            actor_type="owner",
+            actor_label="Meeting owner",
+            title="Analysis retry started",
+            description="The owner started another analysis attempt.",
+            metadata={"job_type": "analysis"},
+        )
 
     job_id = str(uuid4())
     _create_processing_job(
@@ -1373,6 +1460,22 @@ async def update_participant_name(
         .eq("meeting_id", meeting_id)
         .execute()
     )
+    _record_meeting_activity_event(
+        service_client,
+        meeting_id=meeting_id,
+        user_id=user_id,
+        event_type="speaker_renamed",
+        actor_type="owner",
+        actor_label="Meeting owner",
+        title="Speaker renamed",
+        description="The owner corrected a speaker name.",
+        metadata={
+            "participant_id": participant["id"],
+            "original_label": participant.get("display_name"),
+            "new_label": display_name,
+            "detection_method": "owner_correction",
+        },
+    )
 
     return {"participant": updated.data[0]}
 
@@ -1423,6 +1526,7 @@ async def merge_participants(
         .eq("participant_id", source["id"])
         .execute()
     )
+    updated_segment_count = len(updated.data or [])
     (
         service_client.table("participants")
         .delete()
@@ -1430,11 +1534,29 @@ async def merge_participants(
         .eq("meeting_id", meeting_id)
         .execute()
     )
+    _record_meeting_activity_event(
+        service_client,
+        meeting_id=meeting_id,
+        user_id=user_id,
+        event_type="speakers_merged",
+        actor_type="owner",
+        actor_label="Meeting owner",
+        title="Speakers merged",
+        description="The owner merged two speaker identities.",
+        metadata={
+            "source_participant_id": source["id"],
+            "target_participant_id": target["id"],
+            "original_label": source.get("display_name") or source.get("speaker_label"),
+            "new_label": target.get("display_name") or target.get("speaker_label"),
+            "affected_segment_count": updated_segment_count,
+            "detection_method": "owner_correction",
+        },
+    )
 
     return {
         "target_participant_id": target["id"],
         "merged_participant_id": source["id"],
-        "updated_segment_count": len(updated.data or []),
+        "updated_segment_count": updated_segment_count,
     }
 
 
@@ -1512,8 +1634,26 @@ async def assign_transcript_segments(
         .in_("id", matched_segment_ids)
         .execute()
     )
+    updated_segment_count = len(updated.data or [])
+    _record_meeting_activity_event(
+        service_client,
+        meeting_id=meeting_id,
+        user_id=user_id,
+        event_type="transcript_segment_reassigned",
+        actor_type="owner",
+        actor_label="Meeting owner",
+        title="Transcript speaker reassigned",
+        description="The owner reassigned transcript segment speaker attribution.",
+        metadata={
+            "participant_id": participant["id"],
+            "segment_ids": matched_segment_ids,
+            "new_label": participant.get("display_name") or participant.get("speaker_label"),
+            "affected_segment_count": updated_segment_count,
+            "detection_method": "owner_correction",
+        },
+    )
 
     return {
         "participant": participant,
-        "updated_segment_count": len(updated.data or []),
+        "updated_segment_count": updated_segment_count,
     }

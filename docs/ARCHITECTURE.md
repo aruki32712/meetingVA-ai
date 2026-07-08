@@ -18,6 +18,7 @@ Key responsibilities:
 - Browser audio recording and upload controls
 - Progress tracker for processing jobs
 - Transcript, speaker, summary, action item, decision, and question review UI
+- Processing timeline and activity feed display for meeting history and owner corrections
 - Export and search workflows
 
 ## Backend Architecture
@@ -97,6 +98,16 @@ Background processing is tracked in `processing_jobs` with `meeting_id`,
 `job_type`, `status`, `started_at`, `completed_at`, `error_message`,
 `retry_count`, and `worker_version`. RLS allows users to read only jobs for
 their own meetings; backend and worker writes use the service role.
+
+Meeting activity history is stored in `meeting_activity_events`. The table is
+owner-scoped through `meeting_id` and `user_id`, has RLS enabled, and is
+read-only to authenticated users. Trusted database triggers record meeting
+creation, audio upload, processing lifecycle, worker retry, and speaker
+detection events. FastAPI records owner correction events after meeting
+ownership checks for speaker rename, speaker merge, and transcript segment
+reassignment. Metadata is JSONB so speaker confidence fields such as
+`confidence_score`, `original_label`, `new_label`, `affected_segment_count`,
+and `detection_method` can be added without another schema change.
 
 Meeting search is implemented by the `search_meetings` PostgreSQL function.
 The authenticated frontend calls it through the Supabase client. It searches
@@ -186,6 +197,9 @@ MeetingVA AI is not HIPAA compliant today. HIPAA, SOC 2, or paid enterprise comp
 13. The frontend polls every 5 seconds while work is queued or processing,
    stops automatically on terminal statuses, supports cancellation, and shows
    reviewable results.
+14. The meeting detail page shows both a processing timeline and a newest-first
+   activity feed so users can audit what happened and identify speaker
+   corrections that needed owner intervention.
 
 The current processing status flow uses `meetings.processing_status` values:
 
