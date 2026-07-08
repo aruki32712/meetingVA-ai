@@ -2,6 +2,10 @@
 
 This changelog summarizes completed work from repository history. Dates reflect git commit dates when known.
 
+## 2026-07-08
+
+- Implemented background processing infrastructure with a `workers/` package, durable `processing_jobs` tracking, cancellation, 5-second frontend polling, worker tests, Docker Compose worker updates, and deployment documentation.
+
 ## 2026-07-07
 
 - Added the MeetingVA AI quality gate checklist and linked it from the command center docs.

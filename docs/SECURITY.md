@@ -1,6 +1,6 @@
 # MeetingVA AI Security
 
-Last updated: 2026-07-07
+Last updated: 2026-07-08
 
 This document describes the current security foundation for MeetingVA AI. It does not claim HIPAA compliance, SOC 2 compliance, or paid enterprise compliance.
 
@@ -23,6 +23,7 @@ Protected backend workflows currently include:
 - Transcription enqueueing.
 - Analysis enqueueing.
 - Job polling.
+- Job cancellation.
 - Speaker rename.
 - Speaker merge.
 - Transcript segment assignment.
@@ -51,6 +52,7 @@ RLS is enabled for the user-owned tables:
 - `attachments`
 - `project_progress_phases`
 - `project_progress_checklist_items`
+- `processing_jobs`
 
 The security foundation migration also reasserts RLS and adds `audit_logs` with RLS. Authenticated users can read only their own audit rows; inserts should be backend/service-role owned.
 
@@ -58,7 +60,9 @@ The security foundation migration also reasserts RLS and adds `audit_logs` with 
 
 The `meeting-audio` and `meeting-attachments` buckets are private. The frontend uploads audio to a user-prefixed path in `meeting-audio`. Meeting detail playback uses `createSignedUrl` with a one-hour expiry.
 
-The Celery worker downloads private audio with the Supabase service role key from the backend environment only.
+The Celery worker downloads private audio with the Supabase service role key from the backend or worker environment only.
+
+Processing job records are owner-readable through RLS and backend/worker-written through the service role. They may contain safe error summaries but must not store secrets, raw provider payloads, or transcript text.
 
 ## Secrets
 
@@ -102,4 +106,3 @@ Do not process protected health information in MeetingVA AI during the current M
 - Add E2E security tests for cross-user access attempts.
 - Add deletion/export workflows and retention enforcement.
 - Add formal incident response and compliance review before regulated use cases.
-

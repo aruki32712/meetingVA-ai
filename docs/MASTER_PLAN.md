@@ -126,6 +126,7 @@ docs/                         Project roadmap, architecture, and planning docs
 - [x] AI Transcription
 - [x] Multilingual Transcription
 - [x] Background AI Job Queue
+- [x] Durable Background Processing Job Tracking
 - [x] Meeting Summary
 - [x] Action Items
 - [x] Decisions

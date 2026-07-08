@@ -59,7 +59,7 @@ services:
     rootDir: backend
     plan: starter
     buildCommand: pip install -r requirements.txt
-    startCommand: celery -A app.worker:celery_app worker --loglevel=info
+    startCommand: celery -A app.workers.celery_app:celery_app worker --loglevel=info
     envVars:
       - key: PYTHON_VERSION
         value: 3.12.7

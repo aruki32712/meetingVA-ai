@@ -19,6 +19,7 @@ type MeetingStatus =
 type MeetingProcessingStatus =
   | "draft"
   | "uploaded"
+  | "queued"
   | "transcribing"
   | "transcribed"
   | "transcription_failed"
@@ -27,7 +28,8 @@ type MeetingProcessingStatus =
   | "analysis_failed"
   | "processing"
   | "completed"
-  | "failed";
+  | "failed"
+  | "cancelled";
 
 type AttachmentKind = "audio" | "transcript" | "document" | "image" | "other";
 type TranscriptKind = "original" | "translated" | "both";

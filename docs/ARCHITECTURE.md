@@ -40,9 +40,10 @@ Key responsibilities:
 
 Long-running AI work runs outside request handling through Celery workers.
 Redis is the Celery broker and result backend. The FastAPI service validates
-ownership, updates meeting status to a running state, enqueues jobs, and returns
-quickly with a `job_id`; workers perform OpenAI and Supabase side effects and
-write final success or failure statuses back to `meetings`.
+ownership, creates a durable `processing_jobs` row, sets the meeting to
+`queued`, enqueues work, and returns quickly with a `job_id`; workers perform
+OpenAI and Supabase side effects, update job lifecycle fields, and write final
+success, failure, or cancellation statuses back to `meetings`.
 
 ## Supabase Database Architecture
 
@@ -91,6 +92,11 @@ The dashboard progress tracker stores user-owned project planning state in:
 
 These tables are separate from future meeting processing progress so roadmap
 tracking does not depend on recording, upload, or AI job infrastructure.
+
+Background processing is tracked in `processing_jobs` with `meeting_id`,
+`job_type`, `status`, `started_at`, `completed_at`, `error_message`,
+`retry_count`, and `worker_version`. RLS allows users to read only jobs for
+their own meetings; backend and worker writes use the service role.
 
 ## Storage Architecture
 
@@ -150,8 +156,9 @@ MeetingVA AI is not HIPAA compliant today. HIPAA, SOC 2, or paid enterprise comp
 4. The meeting detail page calls the backend transcription endpoint with the
    user's Supabase access token and translation preference.
 5. The backend validates the token, confirms the meeting belongs to the user,
-   sets `meetings.processing_status` to `transcribing`, enqueues a Celery job,
-   and returns `meeting_id`, `job_id`, and `processing_status`.
+   creates a `processing_jobs` row, sets `meetings.processing_status` to
+   `queued`, enqueues a Celery job, and returns `meeting_id`, `job_id`, and
+   `processing_status`.
 6. The frontend polls the protected job status endpoint and refreshes meeting
    data while processing continues.
 7. The Celery worker downloads the private audio object from the
@@ -168,17 +175,20 @@ MeetingVA AI is not HIPAA compliant today. HIPAA, SOC 2, or paid enterprise comp
    ownership and enqueues, then the worker generates English summaries, action
    items, decisions, and questions.
 12. Extracted records are stored with source transcript references.
-13. The frontend updates progress and shows reviewable results.
+13. The frontend polls every 5 seconds while work is queued or processing,
+   stops automatically on terminal statuses, supports cancellation, and shows
+   reviewable results.
 
-The current transcription status flow uses `meetings.processing_status` values:
+The current processing status flow uses `meetings.processing_status` values:
 
 - `uploaded`
+- `queued`
 - `transcribing`
 - `transcribed`
-- `transcription_failed`
 - `analyzing`
 - `analyzed`
-- `analysis_failed`
+- `failed`
+- `cancelled`
 
 ## API Endpoint Plan
 
@@ -202,6 +212,8 @@ Planned backend endpoints:
   - Response includes `meeting_id`, `job_id`, and `processing_status`.
 - `GET /v1/meetings/{meeting_id}/jobs/{job_id}`
   - Protected job and meeting processing-status polling endpoint.
+- `POST /v1/meetings/{meeting_id}/jobs/{job_id}/cancel`
+  - Protected cancellation endpoint for queued or running jobs.
 - `POST /v1/meetings/{meeting_id}/process`
 - `PATCH /v1/meetings/{meeting_id}/participants/{participant_id}`
 - `POST /v1/meetings/{meeting_id}/participants/merge`

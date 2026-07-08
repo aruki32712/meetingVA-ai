@@ -1,6 +1,6 @@
 # MeetingVA AI Quality Gate
 
-Last updated: 2026-07-07
+Last updated: 2026-07-08
 
 This checklist is required before any MeetingVA AI feature, release, or deployment is considered complete. It is a process gate only; it does not change application behavior.
 
@@ -57,6 +57,8 @@ Every future Codex task must update this file if the definition of done changes.
 - [ ] Meeting ownership checks run before protected side effects.
 - [ ] Transcription and analysis endpoints enqueue background work and return quickly.
 - [ ] Job polling reflects current meeting processing status.
+- [ ] Cancellation endpoint moves cancellable jobs to `cancelled` safely.
+- [ ] Durable `processing_jobs` rows are created for background jobs.
 - [ ] Expected OpenAI, Supabase, Redis, and worker failures are handled safely.
 - [ ] Unexpected errors return safe generic responses.
 
@@ -64,6 +66,7 @@ Every future Codex task must update this file if the definition of done changes.
 
 - [ ] New or changed schema is represented by an ordered migration.
 - [ ] Migrations can be applied in order from a fresh Supabase project.
+- [ ] Background job schema tracks `meeting_id`, `job_type`, `status`, timestamps, errors, retries, and worker version.
 - [ ] Owner-scoped tables preserve `owner_id` or compatible ownership fields.
 - [ ] Foreign keys, indexes, and status constraints match current application usage.
 - [ ] Seed or default data matches the implemented feature set.
@@ -99,8 +102,9 @@ Every future Codex task must update this file if the definition of done changes.
 
 - [ ] Transcript jobs do not block UI rendering or navigation.
 - [ ] Analysis jobs do not block UI rendering or navigation.
-- [ ] Meeting status updates correctly through `uploaded`, `transcribing`, `transcribed`, `transcription_failed`, `analyzing`, `analyzed`, and `analysis_failed` as applicable.
+- [ ] Meeting status updates correctly through `uploaded`, `queued`, `transcribing`, `transcribed`, `analyzing`, `analyzed`, `failed`, and `cancelled` as applicable.
 - [ ] Failed AI jobs are recoverable or clearly retryable.
+- [ ] Cancelled AI jobs stop polling and do not enqueue duplicate work.
 - [ ] OpenAI errors are handled safely without leaking secrets or raw provider internals.
 - [ ] Worker failures write a failure status users can understand.
 - [ ] Transcript segments remain ordered and tied to the correct meeting.
@@ -144,6 +148,7 @@ Every future Codex task must update this file if the definition of done changes.
 - [ ] Frontend health check passes.
 - [ ] Backend health check passes.
 - [ ] Worker can connect to Redis, Supabase, and OpenAI.
+- [ ] Worker command uses `app.workers.celery_app:celery_app`.
 - [ ] Deployed smoke test covers recording, upload, transcription, analysis, and speaker edits.
 
 ## 12. Rollback Readiness

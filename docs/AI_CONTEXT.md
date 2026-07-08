@@ -23,7 +23,7 @@ Walter Labs AI is the operating company context for this repository. The operati
 ## Repository Map
 
 - `frontend/`: Next.js app, dashboard routes, auth UI, meeting UI, Supabase browser client.
-- `backend/`: FastAPI app, settings, Supabase clients, Celery app, worker tasks, tests.
+- `backend/`: FastAPI app, settings, Supabase clients, worker package, Celery app, worker tasks, tests.
 - `scripts/supabase/migrations/`: ordered database and storage migrations.
 - `docker/`: local Dockerfiles and compose stack.
 - `docs/`: project command center, architecture, deployment, setup, roadmap, testing, standards.
@@ -39,10 +39,10 @@ Walter Labs AI is the operating company context for this repository. The operati
 4. Frontend uploads audio to the private `meeting-audio` Supabase Storage bucket.
 5. Frontend creates `meetings` and `attachments` records.
 6. Meeting detail requests transcription from FastAPI with the Supabase access token.
-7. FastAPI validates the token, checks meeting ownership, updates status, and enqueues a Celery task.
+7. FastAPI validates the token, checks meeting ownership, creates a durable `processing_jobs` row, updates status to `queued`, and enqueues a Celery task.
 8. Worker downloads audio with the Supabase service role key and calls OpenAI transcription.
 9. Worker stores transcript segments, language metadata, participants, and status.
-10. Meeting detail can request analysis through the same queue pattern.
+10. Meeting detail can request analysis through the same durable queue pattern.
 11. Worker calls OpenAI chat completions for structured JSON and stores summaries, action items, decisions, and questions.
 12. Speaker UI can rename speakers, merge speakers, and assign transcript segments.
 
@@ -52,6 +52,7 @@ Walter Labs AI is the operating company context for this repository. The operati
 - `POST /v1/meetings/{meeting_id}/transcribe`
 - `POST /v1/meetings/{meeting_id}/analyze`
 - `GET /v1/meetings/{meeting_id}/jobs/{job_id}`
+- `POST /v1/meetings/{meeting_id}/jobs/{job_id}/cancel`
 - `PATCH /v1/meetings/{meeting_id}/participants/{participant_id}`
 - `POST /v1/meetings/{meeting_id}/participants/merge`
 - `POST /v1/meetings/{meeting_id}/transcript-segments/assign`
@@ -59,6 +60,7 @@ Walter Labs AI is the operating company context for this repository. The operati
 ## Important Data Concepts
 
 - `meetings.processing_status` drives user-visible workflow state.
+- `processing_jobs` stores durable background job lifecycle state for transcription and analysis.
 - `meetings.owner_id` and `meetings.user_id` are both used for ownership compatibility.
 - `audio_storage_path` points to the private source recording in `meeting-audio`.
 - `participants.display_name` is the editable human-facing speaker name.
@@ -76,6 +78,7 @@ Walter Labs AI is the operating company context for this repository. The operati
 - Preserve private `meeting-audio` playback through signed URLs.
 - Do not expose `SUPABASE_SERVICE_ROLE_KEY`, `SUPABASE_DATABASE_URL`, or `OPENAI_API_KEY` to frontend code.
 - Keep long-running AI work in Celery, not request handlers.
+- Use `backend/app/workers/` for Celery configuration and task modules.
 - Preserve direct user ownership checks before backend side effects.
 - Do not claim HIPAA compliance or process PHI until formal compliance review is complete.
 - Match existing code style and file organization.

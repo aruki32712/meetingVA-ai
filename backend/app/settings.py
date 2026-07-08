@@ -18,6 +18,7 @@ class Settings(BaseSettings):
     redis_url: str = "redis://redis:6379/0"
     celery_broker_url: str = "redis://redis:6379/0"
     celery_result_backend: str = "redis://redis:6379/1"
+    worker_version: str = "local"
     ai_rate_limit_requests: int = 10
     ai_rate_limit_window_seconds: int = 60
 

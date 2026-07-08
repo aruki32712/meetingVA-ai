@@ -73,16 +73,19 @@ type JobEnqueueResponse = {
 type JobStatusResponse = {
   meeting_id: string;
   job_id: string;
+  job_type: "transcription" | "analysis";
   job_state: string;
+  job_status: string;
   ready: boolean;
   successful: boolean;
   failed: boolean;
+  error_message: string | null;
   processing_status: string;
 };
 
 const apiBaseUrl =
   process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000";
-const jobPollIntervalMs = 3000;
+const jobPollIntervalMs = 5000;
 
 function formatTranscriptTime(milliseconds: number) {
   const totalSeconds = Math.floor(milliseconds / 1000);
@@ -126,13 +129,43 @@ function sleep(milliseconds: number) {
   });
 }
 
+function isActiveProcessingStatus(status: string) {
+  return ["queued", "transcribing", "analyzing"].includes(status);
+}
+
 function isTerminalProcessingStatus(status: string) {
   return [
     "transcribed",
     "transcription_failed",
     "analyzed",
-    "analysis_failed"
+    "analysis_failed",
+    "failed",
+    "cancelled"
   ].includes(status);
+}
+
+function formatProcessingStatus(status: string) {
+  if (status === "queued") {
+    return "Queued";
+  }
+
+  if (status === "transcribing" || status === "analyzing") {
+    return "Processing";
+  }
+
+  if (status === "transcribed" || status === "analyzed") {
+    return "Completed";
+  }
+
+  if (status === "failed" || status.endsWith("_failed")) {
+    return "Failed";
+  }
+
+  if (status === "cancelled") {
+    return "Cancelled";
+  }
+
+  return status.replace("_", " ");
 }
 
 export function MeetingDetail({ meetingId }: { meetingId: string }) {
@@ -155,6 +188,11 @@ export function MeetingDetail({ meetingId }: { meetingId: string }) {
   const [isLoading, setIsLoading] = useState(true);
   const [isTranscribing, setIsTranscribing] = useState(false);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
+  const [activeJobId, setActiveJobId] = useState("");
+  const [activeJobType, setActiveJobType] = useState<
+    "transcription" | "analysis" | ""
+  >("");
+  const [isCancellingJob, setIsCancellingJob] = useState(false);
   const [translateToEnglish, setTranslateToEnglish] = useState(false);
   const [error, setError] = useState("");
   const [transcriptionError, setTranscriptionError] = useState("");
@@ -346,7 +384,7 @@ export function MeetingDetail({ meetingId }: { meetingId: string }) {
   useEffect(() => {
     const processingStatus = meeting?.processing_status;
 
-    if (!processingStatus || !["transcribing", "analyzing"].includes(processingStatus)) {
+    if (!processingStatus || !isActiveProcessingStatus(processingStatus)) {
       return;
     }
 
@@ -380,6 +418,7 @@ export function MeetingDetail({ meetingId }: { meetingId: string }) {
       }
 
       const status = (await response.json()) as JobStatusResponse;
+      setActiveJobType(status.job_type);
 
       setMeeting((current) =>
         current
@@ -398,6 +437,52 @@ export function MeetingDetail({ meetingId }: { meetingId: string }) {
     }
   }
 
+  async function cancelProcessing() {
+    if (!activeJobId) {
+      return;
+    }
+
+    setIsCancellingJob(true);
+    setTranscriptionError("");
+    setAnalysisError("");
+
+    try {
+      const accessToken = await getAccessToken();
+      const response = await fetch(
+        `${apiBaseUrl}/v1/meetings/${meetingId}/jobs/${activeJobId}/cancel`,
+        {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${accessToken}`
+          }
+        }
+      );
+
+      if (!response.ok) {
+        const payload = await response.json().catch(() => null);
+        throw new Error(payload?.detail ?? "Unable to cancel processing.");
+      }
+
+      setMeeting((current) =>
+        current ? { ...current, processing_status: "cancelled" } : current
+      );
+      setActiveJobId("");
+      setActiveJobType("");
+      await refreshMeetingData();
+    } catch (cancelError) {
+      const message =
+        cancelError instanceof Error
+          ? cancelError.message
+          : "Unable to cancel processing.";
+      setTranscriptionError(message);
+      setAnalysisError(message);
+    } finally {
+      setIsCancellingJob(false);
+      setIsTranscribing(false);
+      setIsAnalyzing(false);
+    }
+  }
+
   async function generateTranscript() {
     setIsTranscribing(true);
     setTranscriptionError("");
@@ -406,7 +491,7 @@ export function MeetingDetail({ meetingId }: { meetingId: string }) {
       const accessToken = await getAccessToken();
 
       setMeeting((current) =>
-        current ? { ...current, processing_status: "transcribing" } : current
+        current ? { ...current, processing_status: "queued" } : current
       );
 
       const response = await fetch(
@@ -427,6 +512,8 @@ export function MeetingDetail({ meetingId }: { meetingId: string }) {
       }
 
       const payload = (await response.json()) as JobEnqueueResponse;
+      setActiveJobId(payload.job_id);
+      setActiveJobType("transcription");
       setMeeting((current) =>
         current
           ? { ...current, processing_status: payload.processing_status }
@@ -435,14 +522,16 @@ export function MeetingDetail({ meetingId }: { meetingId: string }) {
 
       const status = await pollJobUntilSettled(payload.job_id);
 
-      if (status.failed || status.processing_status === "transcription_failed") {
-        throw new Error("Unable to generate transcript.");
+      if (
+        status.failed ||
+        status.processing_status === "failed" ||
+        status.processing_status === "transcription_failed"
+      ) {
+        throw new Error(status.error_message ?? "Unable to generate transcript.");
       }
     } catch (transcribeError) {
       setMeeting((current) =>
-        current
-          ? { ...current, processing_status: "transcription_failed" }
-          : current
+        current ? { ...current, processing_status: "failed" } : current
       );
       setTranscriptionError(
         transcribeError instanceof Error
@@ -450,6 +539,8 @@ export function MeetingDetail({ meetingId }: { meetingId: string }) {
           : "Unable to generate transcript."
       );
     } finally {
+      setActiveJobId("");
+      setActiveJobType("");
       setIsTranscribing(false);
     }
   }
@@ -462,7 +553,7 @@ export function MeetingDetail({ meetingId }: { meetingId: string }) {
       const accessToken = await getAccessToken();
 
       setMeeting((current) =>
-        current ? { ...current, processing_status: "analyzing" } : current
+        current ? { ...current, processing_status: "queued" } : current
       );
 
       const response = await fetch(
@@ -481,6 +572,8 @@ export function MeetingDetail({ meetingId }: { meetingId: string }) {
       }
 
       const payload = (await response.json()) as JobEnqueueResponse;
+      setActiveJobId(payload.job_id);
+      setActiveJobType("analysis");
       setMeeting((current) =>
         current
           ? { ...current, processing_status: payload.processing_status }
@@ -489,12 +582,16 @@ export function MeetingDetail({ meetingId }: { meetingId: string }) {
 
       const status = await pollJobUntilSettled(payload.job_id);
 
-      if (status.failed || status.processing_status === "analysis_failed") {
-        throw new Error("Unable to generate analysis.");
+      if (
+        status.failed ||
+        status.processing_status === "failed" ||
+        status.processing_status === "analysis_failed"
+      ) {
+        throw new Error(status.error_message ?? "Unable to generate analysis.");
       }
     } catch (analyzeError) {
       setMeeting((current) =>
-        current ? { ...current, processing_status: "analysis_failed" } : current
+        current ? { ...current, processing_status: "failed" } : current
       );
       setAnalysisError(
         analyzeError instanceof Error
@@ -502,6 +599,8 @@ export function MeetingDetail({ meetingId }: { meetingId: string }) {
           : "Unable to generate analysis."
       );
     } finally {
+      setActiveJobId("");
+      setActiveJobType("");
       setIsAnalyzing(false);
     }
   }
@@ -650,12 +749,31 @@ export function MeetingDetail({ meetingId }: { meetingId: string }) {
     );
   }
 
+  const isProcessingActive = isActiveProcessingStatus(meeting.processing_status);
   const isMeetingTranscribing =
-    isTranscribing || meeting.processing_status === "transcribing";
+    isTranscribing ||
+    (meeting.processing_status === "queued" && activeJobType !== "analysis") ||
+    meeting.processing_status === "transcribing";
   const isMeetingAnalyzing =
-    isAnalyzing || meeting.processing_status === "analyzing";
+    isAnalyzing ||
+    (meeting.processing_status === "queued" && activeJobType === "analysis") ||
+    meeting.processing_status === "analyzing";
   const canAnalyze =
-    transcriptSegments.length > 0 && !isMeetingTranscribing && !isMeetingAnalyzing;
+    transcriptSegments.length > 0 && !isProcessingActive;
+  const transcriptButtonLabel =
+    meeting.processing_status === "failed" ||
+    meeting.processing_status === "transcription_failed"
+      ? "Retry Transcript"
+      : isMeetingTranscribing
+        ? "Processing..."
+        : "Generate Transcript";
+  const analysisButtonLabel =
+    meeting.processing_status === "failed" ||
+    meeting.processing_status === "analysis_failed"
+      ? "Retry Analysis"
+      : isMeetingAnalyzing
+        ? "Processing..."
+        : "Generate Analysis";
   const participantById = new Map(
     participants.map((participant, index) => [
       participant.id,
@@ -724,9 +842,21 @@ export function MeetingDetail({ meetingId }: { meetingId: string }) {
               {meeting.description || "No description provided."}
             </p>
           </div>
-          <span className="rounded-full border border-meadow bg-emerald-50 px-3 py-1 text-xs font-medium capitalize text-meadow">
-            {meeting.processing_status.replace("_", " ")}
-          </span>
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="rounded-full border border-meadow bg-emerald-50 px-3 py-1 text-xs font-medium text-meadow">
+              {formatProcessingStatus(meeting.processing_status)}
+            </span>
+            {isProcessingActive && activeJobId ? (
+              <button
+                className="rounded-md border border-slate-300 bg-white px-3 py-1 text-xs font-medium text-ink transition hover:bg-slate-100 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-400"
+                type="button"
+                onClick={cancelProcessing}
+                disabled={isCancellingJob}
+              >
+                {isCancellingJob ? "Cancelling..." : "Cancel Processing"}
+              </button>
+            ) : null}
+          </div>
         </div>
 
         <dl className="mt-6 grid gap-4 sm:grid-cols-3">
@@ -742,8 +872,8 @@ export function MeetingDetail({ meetingId }: { meetingId: string }) {
             <dt className="text-xs font-medium uppercase tracking-wide text-slate-500">
               Status
             </dt>
-            <dd className="mt-1 text-sm font-semibold capitalize text-ink">
-              {meeting.processing_status.replace("_", " ")}
+            <dd className="mt-1 text-sm font-semibold text-ink">
+              {formatProcessingStatus(meeting.processing_status)}
             </dd>
           </div>
           <div className="rounded-lg border border-slate-200 bg-slate-50 p-4">
@@ -794,9 +924,9 @@ export function MeetingDetail({ meetingId }: { meetingId: string }) {
                 className="rounded-md bg-signal px-4 py-2 text-sm font-medium text-white transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:bg-slate-300"
                 type="button"
                 onClick={generateTranscript}
-                disabled={isMeetingTranscribing}
+                disabled={isProcessingActive}
               >
-                {isMeetingTranscribing ? "Generating..." : "Generate Transcript"}
+                {transcriptButtonLabel}
               </button>
             </div>
             <audio className="w-full" controls src={audioUrl} />
@@ -817,7 +947,7 @@ export function MeetingDetail({ meetingId }: { meetingId: string }) {
             </h3>
             <p className="mt-1 text-sm text-slate-600">
               {isMeetingAnalyzing
-                ? "Analysis is in progress."
+                ? "Analysis is queued or processing."
                 : meeting.processing_status === "analyzed"
                   ? "AI-generated summary and structured meeting records."
                   : "Generate analysis after the transcript is ready."}
@@ -829,7 +959,7 @@ export function MeetingDetail({ meetingId }: { meetingId: string }) {
             onClick={generateAnalysis}
             disabled={!canAnalyze}
           >
-            {isMeetingAnalyzing ? "Analyzing..." : "Generate Analysis"}
+            {analysisButtonLabel}
           </button>
         </div>
 

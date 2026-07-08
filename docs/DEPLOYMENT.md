@@ -49,6 +49,8 @@ Apply migrations from oldest to newest:
 5. `scripts/supabase/migrations/0005_ai_meeting_intelligence.sql`
 6. `scripts/supabase/migrations/0006_speaker_intelligence.sql`
 7. `scripts/supabase/migrations/0007_multilingual_transcription.sql`
+8. `scripts/supabase/migrations/0008_security_foundation.sql`
+9. `scripts/supabase/migrations/0009_background_processing_jobs.sql`
 
 Preferred CLI flow:
 
@@ -92,7 +94,7 @@ uvicorn app.main:app --host 0.0.0.0 --port $PORT
 Worker start command:
 
 ```bash
-celery -A app.worker:celery_app worker --loglevel=info
+celery -A app.workers.celery_app:celery_app worker --loglevel=info
 ```
 
 ### Render Environment Variables
@@ -210,19 +212,24 @@ test deployment validation.
    - Open the created meeting detail page.
    - Click Generate Transcript.
    - Confirm the backend returns a `job_id` and the meeting status becomes
-     `transcribing`.
+     `queued`, then `transcribing`.
    - Watch Render worker logs for the Celery task.
    - Confirm the final status becomes `transcribed`.
+   - Confirm a `processing_jobs` row records the job lifecycle.
    - Confirm `transcript_segments` rows are created.
 6. Analysis:
    - Click Generate Analysis after transcription completes.
-   - Confirm the meeting status becomes `analyzing`, then `analyzed`.
+   - Confirm the meeting status becomes `queued`, then `analyzing`, then
+     `analyzed`.
    - Confirm summary or brief text appears.
    - Confirm generated `action_items`, `decisions`, or `questions` rows exist
      when the transcript supports them.
+   - Confirm cancellation moves an active test job to `cancelled` when safe to
+     test.
 7. Failure visibility:
    - If transcription or analysis fails, check Render backend logs, Render
-     worker logs, and the meeting `processing_status`.
+     worker logs, the `processing_jobs` row, and the meeting
+     `processing_status`.
 
 ## Available Checks
 

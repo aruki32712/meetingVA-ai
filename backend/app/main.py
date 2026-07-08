@@ -3,9 +3,10 @@ import logging
 import re
 import time
 from collections import defaultdict, deque
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
-from uuid import UUID
+from uuid import UUID, uuid4
 
 import httpx
 from fastapi import FastAPI, Header, HTTPException, Request
@@ -110,6 +111,14 @@ class JobResponse(BaseModel):
     meeting_id: str
     job_id: str
     processing_status: str
+
+
+ACTIVE_PROCESSING_STATUSES = {"queued", "transcribing", "analyzing"}
+TERMINAL_PROCESSING_STATUSES = {"transcribed", "analyzed", "failed", "cancelled"}
+
+
+def _utc_now_iso() -> str:
+    return datetime.now(UTC).isoformat()
 
 
 @app.get("/health", tags=["system"])
@@ -349,8 +358,152 @@ def _update_meeting_status(service_client: Any, meeting_id: str, status: str) ->
     )
 
 
+def _create_processing_job(
+    service_client: Any,
+    *,
+    job_id: str,
+    meeting_id: str,
+    job_type: str,
+) -> None:
+    (
+        service_client.table("processing_jobs")
+        .insert(
+            {
+                "id": job_id,
+                "meeting_id": meeting_id,
+                "job_type": job_type,
+                "status": "queued",
+                "worker_version": settings.worker_version,
+            }
+        )
+        .execute()
+    )
+
+
+def _get_processing_job(
+    service_client: Any,
+    *,
+    job_id: str,
+    meeting_id: str,
+) -> dict[str, Any] | None:
+    response = (
+        service_client.table("processing_jobs")
+        .select(
+            "id,meeting_id,job_type,status,started_at,completed_at,error_message,retry_count,worker_version"
+        )
+        .eq("id", job_id)
+        .eq("meeting_id", meeting_id)
+        .limit(1)
+        .execute()
+    )
+    return response.data[0] if response.data else None
+
+
+def _processing_job_is_cancelled(service_client: Any, job_id: str | None) -> bool:
+    if not job_id:
+        return False
+
+    response = (
+        service_client.table("processing_jobs")
+        .select("status")
+        .eq("id", job_id)
+        .limit(1)
+        .execute()
+    )
+    job = response.data[0] if response.data else None
+    return bool(job and job.get("status") == "cancelled")
+
+
+def _update_processing_job(
+    service_client: Any,
+    *,
+    job_id: str,
+    values: dict[str, Any],
+) -> None:
+    service_client.table("processing_jobs").update(values).eq("id", job_id).execute()
+
+
+def _mark_processing_job_started(
+    service_client: Any,
+    *,
+    job_id: str,
+    meeting_id: str,
+    status: str,
+    retry_count: int = 0,
+) -> None:
+    _update_processing_job(
+        service_client,
+        job_id=job_id,
+        values={
+            "status": status,
+            "started_at": _utc_now_iso(),
+            "retry_count": retry_count,
+            "worker_version": settings.worker_version,
+        },
+    )
+    _update_meeting_status(service_client, meeting_id, status)
+
+
+def _mark_processing_job_completed(
+    service_client: Any,
+    *,
+    job_id: str,
+    meeting_id: str,
+    status: str,
+) -> None:
+    _update_processing_job(
+        service_client,
+        job_id=job_id,
+        values={
+            "status": status,
+            "completed_at": _utc_now_iso(),
+            "error_message": None,
+        },
+    )
+    _update_meeting_status(service_client, meeting_id, status)
+
+
+def _mark_processing_job_failed(
+    service_client: Any,
+    *,
+    job_id: str,
+    meeting_id: str,
+    error_message: str,
+) -> None:
+    safe_error = error_message[:1000] if error_message else "Job failed."
+    _update_processing_job(
+        service_client,
+        job_id=job_id,
+        values={
+            "status": "failed",
+            "completed_at": _utc_now_iso(),
+            "error_message": safe_error,
+        },
+    )
+    _update_meeting_status(service_client, meeting_id, "failed")
+
+
+def _mark_processing_job_cancelled(
+    service_client: Any,
+    *,
+    job_id: str,
+    meeting_id: str,
+) -> None:
+    logger.info("processing job cancelled", extra={"job_id": job_id})
+    _update_processing_job(
+        service_client,
+        job_id=job_id,
+        values={
+            "status": "cancelled",
+            "completed_at": _utc_now_iso(),
+            "error_message": None,
+        },
+    )
+    _update_meeting_status(service_client, meeting_id, "cancelled")
+
+
 def _ensure_not_processing(meeting: dict[str, Any]) -> None:
-    if meeting.get("processing_status") in {"transcribing", "analyzing"}:
+    if meeting.get("processing_status") in ACTIVE_PROCESSING_STATUSES:
         raise HTTPException(status_code=409, detail="Meeting is already processing.")
 
 
@@ -734,6 +887,15 @@ async def _run_transcribe_meeting_job(
     job_id: str | None = None,
 ) -> dict[str, Any]:
     service_client = get_supabase_service_client()
+
+    if _processing_job_is_cancelled(service_client, job_id):
+        _update_meeting_status(service_client, meeting_id, "cancelled")
+        return {
+            "meeting_id": meeting_id,
+            "job_id": job_id,
+            "processing_status": "cancelled",
+        }
+
     meeting_response = (
         service_client.table("meetings")
         .select("id,title,audio_storage_path,duration_seconds")
@@ -762,6 +924,15 @@ async def _run_transcribe_meeting_job(
         audio_bytes = service_client.storage.from_("meeting-audio").download(
             audio_storage_path
         )
+
+        if _processing_job_is_cancelled(service_client, job_id):
+            _update_meeting_status(service_client, meeting_id, "cancelled")
+            return {
+                "meeting_id": meeting_id,
+                "job_id": job_id,
+                "processing_status": "cancelled",
+            }
+
         filename = Path(audio_storage_path).name or "meeting-audio.webm"
         transcription = await _transcribe_audio_with_openai(
             audio_bytes=audio_bytes,
@@ -833,10 +1004,10 @@ async def _run_transcribe_meeting_job(
             .execute()
         )
     except HTTPException:
-        _update_meeting_status(service_client, meeting_id, "transcription_failed")
+        _update_meeting_status(service_client, meeting_id, "failed")
         raise
     except Exception as exc:
-        _update_meeting_status(service_client, meeting_id, "transcription_failed")
+        _update_meeting_status(service_client, meeting_id, "failed")
         raise HTTPException(
             status_code=500,
             detail="Unable to transcribe meeting audio.",
@@ -860,6 +1031,15 @@ async def _run_analyze_meeting_job(
     job_id: str | None = None,
 ) -> dict[str, Any]:
     service_client = get_supabase_service_client()
+
+    if _processing_job_is_cancelled(service_client, job_id):
+        _update_meeting_status(service_client, meeting_id, "cancelled")
+        return {
+            "meeting_id": meeting_id,
+            "job_id": job_id,
+            "processing_status": "cancelled",
+        }
+
     meeting_response = (
         service_client.table("meetings")
         .select("id,title,processing_status")
@@ -883,7 +1063,7 @@ async def _run_analyze_meeting_job(
     transcript = _format_transcript_for_analysis(transcript_segments)
 
     if not transcript:
-        _update_meeting_status(service_client, meeting_id, "analysis_failed")
+        _update_meeting_status(service_client, meeting_id, "failed")
         raise HTTPException(status_code=400, detail="Meeting has no transcript.")
 
     try:
@@ -924,10 +1104,10 @@ async def _run_analyze_meeting_job(
             .execute()
         )
     except HTTPException:
-        _update_meeting_status(service_client, meeting_id, "analysis_failed")
+        _update_meeting_status(service_client, meeting_id, "failed")
         raise
     except Exception as exc:
-        _update_meeting_status(service_client, meeting_id, "analysis_failed")
+        _update_meeting_status(service_client, meeting_id, "failed")
         raise HTTPException(
             status_code=500,
             detail="Unable to analyze meeting transcript.",
@@ -964,17 +1144,33 @@ async def transcribe_meeting(
     if not meeting.get("audio_storage_path"):
         raise HTTPException(status_code=400, detail="Meeting has no audio file.")
 
-    _update_meeting_status(service_client, meeting_id, "transcribing")
+    job_id = str(uuid4())
+    _create_processing_job(
+        service_client,
+        job_id=job_id,
+        meeting_id=meeting_id,
+        job_type="transcription",
+    )
+    _update_meeting_status(service_client, meeting_id, "queued")
 
-    from app.tasks import transcribe_meeting_task
+    from app.workers.transcription_worker import transcribe_meeting_task
 
     try:
-        task = transcribe_meeting_task.delay(
-            meeting_id=meeting_id,
-            translate_to_english=bool(payload and payload.translate_to_english),
+        transcribe_meeting_task.apply_async(
+            kwargs={
+                "meeting_id": meeting_id,
+                "translate_to_english": bool(payload and payload.translate_to_english),
+                "processing_job_id": job_id,
+            },
+            task_id=job_id,
         )
     except Exception as exc:
-        _update_meeting_status(service_client, meeting_id, "transcription_failed")
+        _mark_processing_job_failed(
+            service_client,
+            job_id=job_id,
+            meeting_id=meeting_id,
+            error_message="Unable to enqueue transcription job.",
+        )
         raise HTTPException(
             status_code=503,
             detail="Unable to enqueue transcription job.",
@@ -982,8 +1178,8 @@ async def transcribe_meeting(
 
     return {
         "meeting_id": meeting_id,
-        "job_id": task.id,
-        "processing_status": "transcribing",
+        "job_id": job_id,
+        "processing_status": "queued",
     }
 
 
@@ -1015,14 +1211,29 @@ async def analyze_meeting(
     if not transcript_response.data:
         raise HTTPException(status_code=400, detail="Meeting has no transcript.")
 
-    _update_meeting_status(service_client, meeting_id, "analyzing")
+    job_id = str(uuid4())
+    _create_processing_job(
+        service_client,
+        job_id=job_id,
+        meeting_id=meeting_id,
+        job_type="analysis",
+    )
+    _update_meeting_status(service_client, meeting_id, "queued")
 
-    from app.tasks import analyze_meeting_task
+    from app.workers.analysis_worker import analyze_meeting_task
 
     try:
-        task = analyze_meeting_task.delay(meeting_id=meeting_id)
+        analyze_meeting_task.apply_async(
+            kwargs={"meeting_id": meeting_id, "processing_job_id": job_id},
+            task_id=job_id,
+        )
     except Exception as exc:
-        _update_meeting_status(service_client, meeting_id, "analysis_failed")
+        _mark_processing_job_failed(
+            service_client,
+            job_id=job_id,
+            meeting_id=meeting_id,
+            error_message="Unable to enqueue analysis job.",
+        )
         raise HTTPException(
             status_code=503,
             detail="Unable to enqueue analysis job.",
@@ -1030,8 +1241,8 @@ async def analyze_meeting(
 
     return {
         "meeting_id": meeting_id,
-        "job_id": task.id,
-        "processing_status": "analyzing",
+        "job_id": job_id,
+        "processing_status": "queued",
     }
 
 
@@ -1042,25 +1253,96 @@ async def get_meeting_job_status(
     authorization: str | None = Header(default=None),
 ) -> dict[str, Any]:
     meeting_id = _validate_uuid(meeting_id, "meeting_id")
+    job_id = _validate_uuid(job_id, "job_id")
     token = _require_bearer_token(authorization)
     service_client = get_supabase_service_client()
     user_id = _require_user_id(token)
     meeting = _require_owned_meeting(service_client, meeting_id, user_id)
+    processing_job = _get_processing_job(
+        service_client,
+        job_id=job_id,
+        meeting_id=meeting_id,
+    )
+
+    if not processing_job:
+        raise HTTPException(status_code=404, detail="Processing job was not found.")
 
     from celery.result import AsyncResult
 
-    from app.celery_app import celery_app
+    from app.workers.celery_app import celery_app
 
-    job = AsyncResult(job_id, app=celery_app)
+    try:
+        job = AsyncResult(job_id, app=celery_app)
+        job_state = job.state
+        ready = job.ready()
+        successful = job.successful() if ready else False
+        failed = job.failed()
+    except Exception:
+        logger.exception("Unable to read Celery result state for job %s", job_id)
+        job_state = "UNKNOWN"
+        ready = processing_job.get("status") in TERMINAL_PROCESSING_STATUSES
+        successful = processing_job.get("status") in {"transcribed", "analyzed"}
+        failed = processing_job.get("status") == "failed"
 
     return {
         "meeting_id": meeting_id,
         "job_id": job_id,
-        "job_state": job.state,
-        "ready": job.ready(),
-        "successful": job.successful() if job.ready() else False,
-        "failed": job.failed(),
+        "job_type": processing_job.get("job_type"),
+        "job_state": job_state,
+        "job_status": processing_job.get("status"),
+        "ready": ready,
+        "successful": successful,
+        "failed": failed or processing_job.get("status") == "failed",
+        "error_message": processing_job.get("error_message"),
         "processing_status": meeting.get("processing_status"),
+    }
+
+
+@app.post("/v1/meetings/{meeting_id}/jobs/{job_id}/cancel", tags=["meetings"])
+async def cancel_meeting_job(
+    meeting_id: str,
+    job_id: str,
+    authorization: str | None = Header(default=None),
+) -> dict[str, Any]:
+    meeting_id = _validate_uuid(meeting_id, "meeting_id")
+    job_id = _validate_uuid(job_id, "job_id")
+    token = _require_bearer_token(authorization)
+    service_client = get_supabase_service_client()
+    user_id = _require_user_id(token)
+    _require_owned_meeting(service_client, meeting_id, user_id)
+    processing_job = _get_processing_job(
+        service_client,
+        job_id=job_id,
+        meeting_id=meeting_id,
+    )
+
+    if not processing_job:
+        raise HTTPException(status_code=404, detail="Processing job was not found.")
+
+    if processing_job.get("status") in TERMINAL_PROCESSING_STATUSES:
+        return {
+            "meeting_id": meeting_id,
+            "job_id": job_id,
+            "processing_status": processing_job.get("status"),
+        }
+
+    from app.workers.celery_app import celery_app
+
+    try:
+        celery_app.control.revoke(job_id, terminate=False)
+    except Exception:
+        logger.exception("Unable to revoke Celery job %s", job_id)
+
+    _mark_processing_job_cancelled(
+        service_client,
+        job_id=job_id,
+        meeting_id=meeting_id,
+    )
+
+    return {
+        "meeting_id": meeting_id,
+        "job_id": job_id,
+        "processing_status": "cancelled",
     }
 
 
