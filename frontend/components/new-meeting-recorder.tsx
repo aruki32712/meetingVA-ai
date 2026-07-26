@@ -46,6 +46,7 @@ export function NewMeetingRecorder() {
   const streamRef = useRef<MediaStream | null>(null);
   const chunksRef = useRef<BlobPart[]>([]);
   const discardRecordingRef = useRef(false);
+  const playbackUrlRef = useRef("");
   const [title, setTitle] = useState("");
   const [meetingDate, setMeetingDate] = useState(getTodayInputValue());
   const [description, setDescription] = useState("");
@@ -105,11 +106,11 @@ export function NewMeetingRecorder() {
     return () => {
       streamRef.current?.getTracks().forEach((track) => track.stop());
 
-      if (playbackUrl) {
-        URL.revokeObjectURL(playbackUrl);
+      if (playbackUrlRef.current) {
+        URL.revokeObjectURL(playbackUrlRef.current);
       }
     };
-  }, [playbackUrl]);
+  }, []);
 
   async function startRecording() {
     setRecordingError("");
@@ -142,42 +143,75 @@ export function NewMeetingRecorder() {
       mediaRecorderRef.current = recorder;
       setElapsedSeconds(0);
 
+      recorder.onstart = () => {
+        setRecordingStatus("recording");
+      };
+
       recorder.ondataavailable = (event) => {
         if (event.data.size > 0) {
           chunksRef.current.push(event.data);
         }
       };
 
-      recorder.onerror = () => {
+      recorder.onpause = () => {
+        setRecordingStatus("paused");
+      };
+
+      recorder.onresume = () => {
+        setRecordingStatus("recording");
+      };
+
+      recorder.onerror = (event) => {
+        console.error("MediaRecorder capture error", event);
         setRecordingStatus("error");
         setRecordingError("The recorder reported an audio capture error.");
       };
 
       recorder.onstop = () => {
-        if (discardRecordingRef.current) {
-          discardRecordingRef.current = false;
+        try {
+          if (discardRecordingRef.current) {
+            discardRecordingRef.current = false;
+            chunksRef.current = [];
+            return;
+          }
+
+          const audioBlob = new Blob(chunksRef.current, {
+            type: recorder.mimeType || "audio/webm"
+          });
+          const nextPlaybackUrl = URL.createObjectURL(audioBlob);
+
+          if (playbackUrlRef.current) {
+            URL.revokeObjectURL(playbackUrlRef.current);
+          }
+
+          playbackUrlRef.current = nextPlaybackUrl;
           chunksRef.current = [];
+          setRecordingBlob(audioBlob);
+          setPlaybackUrl(nextPlaybackUrl);
+          setRecordingStatus("stopped");
+        } catch (error) {
+          console.error("Unable to finalize MediaRecorder audio", error);
+          setRecordingStatus("error");
+          setRecordingError("Unable to finalize the audio recording.");
+        } finally {
           stream.getTracks().forEach((track) => track.stop());
-          return;
+
+          if (streamRef.current === stream) {
+            streamRef.current = null;
+          }
+
+          if (mediaRecorderRef.current === recorder) {
+            mediaRecorderRef.current = null;
+          }
         }
-
-        const audioBlob = new Blob(chunksRef.current, {
-          type: recorder.mimeType || "audio/webm"
-        });
-
-        if (playbackUrl) {
-          URL.revokeObjectURL(playbackUrl);
-        }
-
-        setRecordingBlob(audioBlob);
-        setPlaybackUrl(URL.createObjectURL(audioBlob));
-        setRecordingStatus("stopped");
-        stream.getTracks().forEach((track) => track.stop());
       };
 
       recorder.start();
-      setRecordingStatus("recording");
     } catch (error) {
+      console.error("Unable to start MediaRecorder", error);
+      streamRef.current?.getTracks().forEach((track) => track.stop());
+      streamRef.current = null;
+      mediaRecorderRef.current = null;
       setRecordingStatus("error");
       setRecordingError(
         error instanceof DOMException && error.name === "NotAllowedError"
@@ -188,35 +222,70 @@ export function NewMeetingRecorder() {
   }
 
   function pauseRecording() {
-    if (mediaRecorderRef.current?.state === "recording") {
-      mediaRecorderRef.current.pause();
-      setRecordingStatus("paused");
+    const recorder = mediaRecorderRef.current;
+
+    if (!recorder || recorder.state !== "recording") {
+      console.warn("MediaRecorder pause ignored in invalid state", recorder?.state);
+      return;
+    }
+
+    try {
+      recorder.pause();
+    } catch (error) {
+      console.error("Unable to pause MediaRecorder", error);
+      setRecordingError("Unable to pause the audio recording.");
     }
   }
 
   function resumeRecording() {
-    if (mediaRecorderRef.current?.state === "paused") {
-      mediaRecorderRef.current.resume();
-      setRecordingStatus("recording");
+    const recorder = mediaRecorderRef.current;
+
+    if (!recorder || recorder.state !== "paused") {
+      console.warn("MediaRecorder resume ignored in invalid state", recorder?.state);
+      return;
+    }
+
+    try {
+      recorder.resume();
+    } catch (error) {
+      console.error("Unable to resume MediaRecorder", error);
+      setRecordingError("Unable to resume the audio recording.");
     }
   }
 
   function stopRecording() {
+    const recorder = mediaRecorderRef.current;
+
     if (
-      mediaRecorderRef.current &&
-      mediaRecorderRef.current.state !== "inactive"
+      !recorder ||
+      (recorder.state !== "recording" && recorder.state !== "paused")
     ) {
-      discardRecordingRef.current = true;
-      mediaRecorderRef.current.stop();
+      console.warn("MediaRecorder stop ignored in invalid state", recorder?.state);
+      return;
+    }
+
+    try {
+      recorder.stop();
+    } catch (error) {
+      console.error("Unable to stop MediaRecorder", error);
+      setRecordingError("Unable to stop the audio recording.");
     }
   }
 
   function deleteRecording() {
+    const recorder = mediaRecorderRef.current;
+
     if (
-      mediaRecorderRef.current &&
-      mediaRecorderRef.current.state !== "inactive"
+      recorder &&
+      (recorder.state === "recording" || recorder.state === "paused")
     ) {
-      mediaRecorderRef.current.stop();
+      discardRecordingRef.current = true;
+
+      try {
+        recorder.stop();
+      } catch (error) {
+        console.error("Unable to discard MediaRecorder recording", error);
+      }
     }
 
     streamRef.current?.getTracks().forEach((track) => track.stop());
@@ -232,6 +301,7 @@ export function NewMeetingRecorder() {
 
     if (playbackUrl) {
       URL.revokeObjectURL(playbackUrl);
+      playbackUrlRef.current = "";
       setPlaybackUrl("");
     }
   }
