@@ -171,6 +171,10 @@ export function NewMeetingRecorder() {
       };
 
       recorder.onstop = () => {
+        if (mediaRecorderRef.current !== recorder) {
+          return;
+        }
+
         try {
           if (discardRecordingRef.current) {
             discardRecordingRef.current = false;
@@ -271,6 +275,18 @@ export function NewMeetingRecorder() {
       recorder.stop();
       setRecordingStatus("stopping");
       streamRef.current?.getTracks().forEach((track) => track.stop());
+
+      window.setTimeout(() => {
+        if (
+          mediaRecorderRef.current === recorder &&
+          recorder.state === "inactive"
+        ) {
+          console.warn(
+            "MediaRecorder stop event was not received; finalizing recording"
+          );
+          recorder.onstop?.(new Event("stop"));
+        }
+      }, 1500);
     } catch (error) {
       console.error("Unable to stop MediaRecorder", error);
       setRecordingError("Unable to stop the audio recording.");
