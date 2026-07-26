@@ -9,6 +9,7 @@ type RecordingStatus =
   | "idle"
   | "recording"
   | "paused"
+  | "stopping"
   | "stopped"
   | "unsupported"
   | "error";
@@ -68,6 +69,8 @@ export function NewMeetingRecorder() {
         return "Recording";
       case "paused":
         return "Paused";
+      case "stopping":
+        return "Stopping recording...";
       case "stopped":
         return "Recording ready";
       case "unsupported":
@@ -266,6 +269,8 @@ export function NewMeetingRecorder() {
 
     try {
       recorder.stop();
+      setRecordingStatus("stopping");
+      streamRef.current?.getTracks().forEach((track) => track.stop());
     } catch (error) {
       console.error("Unable to stop MediaRecorder", error);
       setRecordingError("Unable to stop the audio recording.");
@@ -497,6 +502,7 @@ export function NewMeetingRecorder() {
             disabled={
               recordingStatus === "recording" ||
               recordingStatus === "paused" ||
+              recordingStatus === "stopping" ||
               recordingStatus === "unsupported" ||
               isSaving
             }
