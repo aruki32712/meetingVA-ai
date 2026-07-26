@@ -375,7 +375,7 @@ export function NewMeetingRecorder() {
         });
 
       if (uploadError) {
-        throw uploadError;
+        throw new Error(`Audio upload failed: ${uploadError.message}`);
       }
 
       setUploadProgress(75);
@@ -397,7 +397,8 @@ export function NewMeetingRecorder() {
       });
 
       if (insertError) {
-        throw insertError;
+        await supabase.storage.from("meeting-audio").remove([storagePath]);
+        throw new Error(`Meeting creation failed: ${insertError.message}`);
       }
 
       const { error: attachmentError } = await supabase
@@ -414,7 +415,9 @@ export function NewMeetingRecorder() {
         });
 
       if (attachmentError) {
-        throw attachmentError;
+        throw new Error(
+          `Attachment registration failed: ${attachmentError.message}`
+        );
       }
 
       setUploadProgress(100);
