@@ -23,14 +23,14 @@ export function MeetingsList() {
 
     async function loadMeetings() {
       const supabase = createBrowserSupabaseClient();
-      const { data: sessionData, error: sessionError } =
-        await supabase.auth.getSession();
+      const { data: userData, error: userError } =
+        await supabase.auth.getUser();
 
-      if (sessionError) {
-        throw sessionError;
+      if (userError) {
+        throw new Error(`Unable to verify your session: ${userError.message}`);
       }
 
-      const userId = sessionData.session?.user.id;
+      const userId = userData.user?.id;
 
       if (!userId) {
         return [];
