@@ -9,10 +9,10 @@ type MeetingDetailRow = {
   id: string;
   title: string;
   description: string | null;
-  meeting_date: string;
+  scheduled_at: string | null;
   audio_storage_path: string | null;
   duration_seconds: number | null;
-  processing_status: string;
+  status: string;
   summary: string | null;
   brief: string | null;
   detected_language: string | null;
@@ -162,6 +162,18 @@ function sleep(milliseconds: number) {
   return new Promise((resolve) => {
     window.setTimeout(resolve, milliseconds);
   });
+}
+
+function toMeetingStatus(processingStatus: string) {
+  if (
+    processingStatus === "completed" ||
+    processingStatus === "transcribed" ||
+    processingStatus === "analyzed"
+  ) {
+    return "completed";
+  }
+
+  return "processing";
 }
 
 function isActiveProcessingStatus(status: string) {
@@ -441,7 +453,7 @@ export function MeetingDetail({ meetingId }: { meetingId: string }) {
     const { data, error: meetingError } = await supabase
       .from("meetings")
       .select(
-        "id,title,description,meeting_date,audio_storage_path,duration_seconds,processing_status,summary,brief,detected_language,transcript_language,translation_language,translate_to_english,transcript_kind,tags,created_at"
+        "id,title,description,status,scheduled_at,audio_storage_path,duration_seconds,created_at"
       )
       .eq("id", meetingId)
       .single();
@@ -543,7 +555,17 @@ export function MeetingDetail({ meetingId }: { meetingId: string }) {
     }
 
     return {
-      meeting: data,
+      meeting: {
+        ...data,
+        summary: null,
+        brief: null,
+        detected_language: null,
+        transcript_language: null,
+        translation_language: null,
+        translate_to_english: false,
+        transcript_kind: "original" as const,
+        tags: []
+      },
       audioUrl: signedAudioUrl,
       transcriptSegments: segments ?? [],
       participants: participantRows ?? [],
@@ -649,7 +671,7 @@ export function MeetingDetail({ meetingId }: { meetingId: string }) {
   }, [loadMeeting]);
 
   useEffect(() => {
-    const processingStatus = meeting?.processing_status;
+    const processingStatus = meeting?.status;
 
     if (!processingStatus || !isActiveProcessingStatus(processingStatus)) {
       return;
@@ -662,7 +684,7 @@ export function MeetingDetail({ meetingId }: { meetingId: string }) {
     return () => {
       window.clearInterval(intervalId);
     };
-  }, [meeting?.processing_status, refreshMeetingData]);
+  }, [meeting?.status, refreshMeetingData]);
 
   async function pollJobUntilSettled(jobId: string) {
     const accessToken = await getAccessToken();
@@ -689,7 +711,7 @@ export function MeetingDetail({ meetingId }: { meetingId: string }) {
 
       setMeeting((current) =>
         current
-          ? { ...current, processing_status: status.processing_status }
+          ? { ...current, status: toMeetingStatus(status.processing_status) }
           : current
       );
 
@@ -731,7 +753,7 @@ export function MeetingDetail({ meetingId }: { meetingId: string }) {
       }
 
       setMeeting((current) =>
-        current ? { ...current, processing_status: "cancelled" } : current
+        current ? { ...current, status: "processing" } : current
       );
       setActiveJobId("");
       setActiveJobType("");
@@ -758,7 +780,7 @@ export function MeetingDetail({ meetingId }: { meetingId: string }) {
       const accessToken = await getAccessToken();
 
       setMeeting((current) =>
-        current ? { ...current, processing_status: "queued" } : current
+        current ? { ...current, status: "processing" } : current
       );
 
       const response = await fetch(
@@ -783,7 +805,7 @@ export function MeetingDetail({ meetingId }: { meetingId: string }) {
       setActiveJobType("transcription");
       setMeeting((current) =>
         current
-          ? { ...current, processing_status: payload.processing_status }
+          ? { ...current, status: toMeetingStatus(payload.processing_status) }
           : current
       );
 
@@ -798,7 +820,7 @@ export function MeetingDetail({ meetingId }: { meetingId: string }) {
       }
     } catch (transcribeError) {
       setMeeting((current) =>
-        current ? { ...current, processing_status: "failed" } : current
+        current ? { ...current, status: "processing" } : current
       );
       setTranscriptionError(
         transcribeError instanceof Error
@@ -820,7 +842,7 @@ export function MeetingDetail({ meetingId }: { meetingId: string }) {
       const accessToken = await getAccessToken();
 
       setMeeting((current) =>
-        current ? { ...current, processing_status: "queued" } : current
+        current ? { ...current, status: "processing" } : current
       );
 
       const response = await fetch(
@@ -843,7 +865,7 @@ export function MeetingDetail({ meetingId }: { meetingId: string }) {
       setActiveJobType("analysis");
       setMeeting((current) =>
         current
-          ? { ...current, processing_status: payload.processing_status }
+          ? { ...current, status: toMeetingStatus(payload.processing_status) }
           : current
       );
 
@@ -858,7 +880,7 @@ export function MeetingDetail({ meetingId }: { meetingId: string }) {
       }
     } catch (analyzeError) {
       setMeeting((current) =>
-        current ? { ...current, processing_status: "failed" } : current
+        current ? { ...current, status: "processing" } : current
       );
       setAnalysisError(
         analyzeError instanceof Error
@@ -1016,27 +1038,23 @@ export function MeetingDetail({ meetingId }: { meetingId: string }) {
     );
   }
 
-  const isProcessingActive = isActiveProcessingStatus(meeting.processing_status);
+  const isProcessingActive = meeting.status === "processing";
   const isMeetingTranscribing =
     isTranscribing ||
-    (meeting.processing_status === "queued" && activeJobType !== "analysis") ||
-    meeting.processing_status === "transcribing";
+    meeting.status === "processing" && activeJobType !== "analysis";
   const isMeetingAnalyzing =
     isAnalyzing ||
-    (meeting.processing_status === "queued" && activeJobType === "analysis") ||
-    meeting.processing_status === "analyzing";
+    meeting.status === "processing" && activeJobType === "analysis";
   const canAnalyze =
     transcriptSegments.length > 0 && !isProcessingActive;
   const transcriptButtonLabel =
-    meeting.processing_status === "failed" ||
-    meeting.processing_status === "transcription_failed"
+    Boolean(transcriptionError)
       ? "Retry Transcript"
       : isMeetingTranscribing
         ? "Processing..."
         : "Generate Transcript";
   const analysisButtonLabel =
-    meeting.processing_status === "failed" ||
-    meeting.processing_status === "analysis_failed"
+    Boolean(analysisError)
       ? "Retry Analysis"
       : isMeetingAnalyzing
         ? "Processing..."
@@ -1107,7 +1125,7 @@ export function MeetingDetail({ meetingId }: { meetingId: string }) {
         <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
           <div>
             <p className="text-sm font-medium text-meadow">
-              {formatDate(meeting.meeting_date)}
+              {formatDate(meeting.scheduled_at ?? meeting.created_at)}
             </p>
             <h2 className="mt-2 text-2xl font-semibold text-ink">
               {meeting.title}
@@ -1118,7 +1136,7 @@ export function MeetingDetail({ meetingId }: { meetingId: string }) {
           </div>
           <div className="flex flex-wrap items-center gap-2">
             <span className="rounded-full border border-meadow bg-emerald-50 px-3 py-1 text-xs font-medium text-meadow">
-              {formatProcessingStatus(meeting.processing_status)}
+              {formatProcessingStatus(meeting.status)}
             </span>
             {isProcessingActive && activeJobId ? (
               <button
@@ -1147,7 +1165,7 @@ export function MeetingDetail({ meetingId }: { meetingId: string }) {
               Status
             </dt>
             <dd className="mt-1 text-sm font-semibold text-ink">
-              {formatProcessingStatus(meeting.processing_status)}
+              {formatProcessingStatus(meeting.status)}
             </dd>
           </div>
           <div className="rounded-lg border border-slate-200 bg-slate-50 p-4">
@@ -1466,7 +1484,7 @@ export function MeetingDetail({ meetingId }: { meetingId: string }) {
             <p className="mt-1 text-sm text-slate-600">
               {isMeetingAnalyzing
                 ? "Analysis is queued or processing."
-                : meeting.processing_status === "analyzed"
+                : meeting.status === "completed"
                   ? "AI-generated summary and structured meeting records."
                   : "Generate analysis after the transcript is ready."}
             </p>

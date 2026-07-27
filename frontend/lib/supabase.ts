@@ -16,21 +16,6 @@ type MeetingStatus =
   | "completed"
   | "archived";
 
-type MeetingProcessingStatus =
-  | "draft"
-  | "uploaded"
-  | "queued"
-  | "transcribing"
-  | "transcribed"
-  | "transcription_failed"
-  | "analyzing"
-  | "analyzed"
-  | "analysis_failed"
-  | "processing"
-  | "completed"
-  | "failed"
-  | "cancelled";
-
 type AttachmentKind = "audio" | "transcript" | "document" | "image" | "other";
 type TranscriptKind = "original" | "translated" | "both";
 type ProcessingJobType = "transcription" | "analysis";
@@ -44,78 +29,45 @@ type Database = {
         Row: {
           id: string;
           owner_id: string;
-          user_id: string;
           title: string;
           description: string | null;
           status: MeetingStatus;
-          meeting_date: string;
           scheduled_at: string | null;
           started_at: string | null;
           ended_at: string | null;
           source: string | null;
           audio_storage_path: string | null;
           duration_seconds: number | null;
-          processing_status: MeetingProcessingStatus;
-          summary: string | null;
-          brief: string | null;
-          detected_language: string | null;
-          transcript_language: string | null;
-          translation_language: string | null;
-          translate_to_english: boolean;
-          transcript_kind: TranscriptKind;
-          tags: string[];
           created_at: string;
           updated_at: string;
         };
         Insert: {
           id?: string;
           owner_id: string;
-          user_id: string;
           title: string;
           description?: string | null;
           status?: MeetingStatus;
-          meeting_date: string;
           scheduled_at?: string | null;
           started_at?: string | null;
           ended_at?: string | null;
           source?: string | null;
           audio_storage_path?: string | null;
           duration_seconds?: number | null;
-          processing_status?: MeetingProcessingStatus;
-          summary?: string | null;
-          brief?: string | null;
-          detected_language?: string | null;
-          transcript_language?: string | null;
-          translation_language?: string | null;
-          translate_to_english?: boolean;
-          transcript_kind?: TranscriptKind;
-          tags?: string[];
           created_at?: string;
           updated_at?: string;
         };
         Update: {
           id?: string;
           owner_id?: string;
-          user_id?: string;
           title?: string;
           description?: string | null;
           status?: MeetingStatus;
-          meeting_date?: string;
           scheduled_at?: string | null;
           started_at?: string | null;
           ended_at?: string | null;
           source?: string | null;
           audio_storage_path?: string | null;
           duration_seconds?: number | null;
-          processing_status?: MeetingProcessingStatus;
-          summary?: string | null;
-          brief?: string | null;
-          detected_language?: string | null;
-          transcript_language?: string | null;
-          translation_language?: string | null;
-          translate_to_english?: boolean;
-          transcript_kind?: TranscriptKind;
-          tags?: string[];
           created_at?: string;
           updated_at?: string;
         };
@@ -570,31 +522,9 @@ type Database = {
       };
     };
     Views: Record<string, never>;
-    Functions: {
-      search_meetings: {
-        Args: {
-          search_query?: string;
-          date_from?: string;
-          date_to?: string;
-          status_filter?: string;
-          participant_filter?: string;
-          tag_filter?: string;
-          result_limit?: number;
-        };
-        Returns: {
-          meeting_id: string;
-          meeting_title: string;
-          meeting_date: string;
-          processing_status: string;
-          matching_excerpt: string;
-          match_type: string;
-          rank: number;
-        }[];
-      };
-    };
+    Functions: Record<string, never>;
     Enums: {
       attachment_kind: AttachmentKind;
-      meeting_processing_status: MeetingProcessingStatus;
       meeting_status: MeetingStatus;
       project_progress_status: ProjectProgressStatus;
     };

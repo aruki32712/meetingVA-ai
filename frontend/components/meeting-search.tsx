@@ -6,13 +6,11 @@ import { createBrowserSupabaseClient } from "@/lib/supabase";
 import { formatDate } from "./meeting-utils";
 
 type SearchResult = {
-  meeting_id: string;
-  meeting_title: string;
-  meeting_date: string;
-  processing_status: string;
-  matching_excerpt: string;
-  match_type: string;
-  rank: number;
+  id: string;
+  title: string;
+  description: string | null;
+  scheduled_at: string | null;
+  status: string;
 };
 
 type FilterOptions = {
@@ -22,25 +20,19 @@ type FilterOptions = {
 
 const processingStatuses = [
   "draft",
-  "uploaded",
-  "queued",
-  "transcribing",
-  "transcribed",
-  "transcription_failed",
-  "analyzing",
-  "analyzed",
-  "analysis_failed",
+  "recording",
   "processing",
   "completed",
-  "failed",
-  "cancelled"
-];
+  "archived"
+] as const;
+
+type MeetingStatusFilter = (typeof processingStatuses)[number];
 
 export function MeetingSearch() {
   const [query, setQuery] = useState("");
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
-  const [status, setStatus] = useState("");
+  const [status, setStatus] = useState<MeetingStatusFilter | "">("");
   const [participant, setParticipant] = useState("");
   const [tag, setTag] = useState("");
   const [options, setOptions] = useState<FilterOptions>({
@@ -66,8 +58,8 @@ export function MeetingSearch() {
 
       const { data: meetings, error: meetingsError } = await supabase
         .from("meetings")
-        .select("id,tags")
-        .eq("user_id", userId);
+        .select("id")
+        .eq("owner_id", userId);
 
       if (meetingsError) {
         throw meetingsError;
@@ -95,9 +87,7 @@ export function MeetingSearch() {
       if (isMounted) {
         setOptions({
           participants: [...new Set(participantNames)],
-          tags: [
-            ...new Set((meetings ?? []).flatMap((meeting) => meeting.tags ?? []))
-          ].sort((a, b) => a.localeCompare(b))
+          tags: []
         });
       }
     }
@@ -119,18 +109,45 @@ export function MeetingSearch() {
 
     try {
       const supabase = createBrowserSupabaseClient();
-      const { data, error: searchError } = await supabase.rpc(
-        "search_meetings",
-        {
-          search_query: query,
-          date_from: dateFrom || undefined,
-          date_to: dateTo || undefined,
-          status_filter: status || undefined,
-          participant_filter: participant || undefined,
-          tag_filter: tag || undefined,
-          result_limit: 50
-        }
-      );
+      const { data: userData, error: userError } = await supabase.auth.getUser();
+
+      if (userError || !userData.user) {
+        throw userError ?? new Error("You must be signed in to search meetings.");
+      }
+
+      let meetingsQuery = supabase
+        .from("meetings")
+        .select("id,title,description,scheduled_at,status")
+        .eq("owner_id", userData.user.id)
+        .order("scheduled_at", { ascending: false })
+        .limit(50);
+
+      if (query.trim()) {
+        const escapedQuery = query.trim().replaceAll(",", "");
+        meetingsQuery = meetingsQuery.or(
+          `title.ilike.%${escapedQuery}%,description.ilike.%${escapedQuery}%`
+        );
+      }
+
+      if (dateFrom) {
+        meetingsQuery = meetingsQuery.gte(
+          "scheduled_at",
+          `${dateFrom}T00:00:00.000Z`
+        );
+      }
+
+      if (dateTo) {
+        meetingsQuery = meetingsQuery.lte(
+          "scheduled_at",
+          `${dateTo}T23:59:59.999Z`
+        );
+      }
+
+      if (status) {
+        meetingsQuery = meetingsQuery.eq("status", status);
+      }
+
+      const { data, error: searchError } = await meetingsQuery;
 
       if (searchError) {
         throw searchError;
@@ -210,7 +227,9 @@ export function MeetingSearch() {
               <select
                 className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
                 id="status-filter"
-                onChange={(event) => setStatus(event.target.value)}
+                onChange={(event) =>
+                  setStatus(event.target.value as MeetingStatusFilter | "")
+                }
                 value={status}
               >
                 <option value="">Any status</option>
@@ -314,25 +333,27 @@ export function MeetingSearch() {
           </div>
           <ul className="divide-y divide-slate-200">
             {results.map((result) => (
-              <li className="p-6" key={result.meeting_id}>
+              <li className="p-6" key={result.id}>
                 <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                   <div>
                     <Link
                       className="text-lg font-semibold text-signal hover:text-ink"
-                      href={`/dashboard/meetings/${result.meeting_id}`}
+                      href={`/dashboard/meetings/${result.id}`}
                     >
-                      {result.meeting_title}
+                      {result.title}
                     </Link>
                     <p className="mt-1 text-sm text-slate-500">
-                      {formatDate(result.meeting_date)}
+                      {formatDate(result.scheduled_at ?? "")}
                     </p>
                   </div>
                   <span className="w-fit rounded-full border border-meadow bg-emerald-50 px-3 py-1 text-xs font-medium capitalize text-meadow">
-                    {result.match_type}
+                    {result.status}
                   </span>
                 </div>
                 <p className="mt-4 text-sm leading-6 text-slate-700">
-                  {renderHighlightedExcerpt(result.matching_excerpt)}
+                  {renderHighlightedExcerpt(
+                    result.description ?? "No description provided."
+                  )}
                 </p>
               </li>
             ))}

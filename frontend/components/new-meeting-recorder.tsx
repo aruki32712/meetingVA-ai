@@ -3,7 +3,7 @@
 import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { createBrowserSupabaseClient } from "@/lib/supabase";
-import { formatDuration, getTodayInputValue, parseTags } from "./meeting-utils";
+import { formatDuration, getTodayInputValue } from "./meeting-utils";
 
 type RecordingStatus =
   | "idle"
@@ -51,7 +51,6 @@ export function NewMeetingRecorder() {
   const [title, setTitle] = useState("");
   const [meetingDate, setMeetingDate] = useState(getTodayInputValue());
   const [description, setDescription] = useState("");
-  const [tags, setTags] = useState("");
   const [recordingStatus, setRecordingStatus] =
     useState<RecordingStatus>("idle");
   const [recordingError, setRecordingError] = useState("");
@@ -384,16 +383,13 @@ export function NewMeetingRecorder() {
       const { error: insertError } = await supabase.from("meetings").insert({
         id: meetingId,
         owner_id: userId,
-        user_id: userId,
         title: title.trim(),
         description: description.trim() || null,
-        meeting_date: meetingDate,
+        scheduled_at: `${meetingDate}T00:00:00.000Z`,
         audio_storage_path: storagePath,
         duration_seconds: elapsedSeconds,
-        processing_status: "uploaded",
         status: "completed",
-        source: "browser_recording",
-        tags: parseTags(tags)
+        source: "browser_recording"
       });
 
       if (insertError) {
@@ -472,15 +468,6 @@ export function NewMeetingRecorder() {
             />
           </label>
 
-          <label className="grid gap-2 text-sm font-medium text-ink">
-            Tags
-            <input
-              className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm outline-none transition focus:border-signal focus:ring-2 focus:ring-blue-100"
-              value={tags}
-              onChange={(event) => setTags(event.target.value)}
-              placeholder="planning, customer, sales"
-            />
-          </label>
         </div>
       </section>
 

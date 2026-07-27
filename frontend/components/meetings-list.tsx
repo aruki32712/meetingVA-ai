@@ -8,9 +8,9 @@ import { formatDate, formatDuration } from "./meeting-utils";
 type MeetingRow = {
   id: string;
   title: string;
-  meeting_date: string;
+  scheduled_at: string | null;
   duration_seconds: number | null;
-  processing_status: string;
+  status: string;
 };
 
 export function MeetingsList() {
@@ -38,8 +38,8 @@ export function MeetingsList() {
 
       const { data, error: meetingsError } = await supabase
         .from("meetings")
-        .select("id,title,meeting_date,duration_seconds,processing_status")
-        .eq("user_id", userId)
+        .select("id,title,scheduled_at,duration_seconds,status")
+        .eq("owner_id", userId)
         .order("created_at", { ascending: false });
 
       if (meetingsError) {
@@ -146,14 +146,14 @@ export function MeetingsList() {
                       </Link>
                     </td>
                     <td className="px-5 py-4 text-slate-600">
-                      {formatDate(meeting.meeting_date)}
+                      {formatDate(meeting.scheduled_at ?? "")}
                     </td>
                     <td className="px-5 py-4 text-slate-600">
                       {formatDuration(meeting.duration_seconds)}
                     </td>
                     <td className="px-5 py-4">
                       <span className="rounded-full border border-meadow bg-emerald-50 px-3 py-1 text-xs font-medium capitalize text-meadow">
-                        {meeting.processing_status.replace("_", " ")}
+                        {meeting.status.replace("_", " ")}
                       </span>
                     </td>
                   </tr>
