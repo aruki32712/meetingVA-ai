@@ -21,7 +21,7 @@ type MeetingDetailRow = {
   translate_to_english: boolean;
   transcript_kind: "original" | "translated" | "both";
   tags: string[];
-  created_at: string;
+  created_at: string | null;
 };
 
 type ProcessingEvent = {
@@ -32,7 +32,7 @@ type ProcessingEvent = {
   status: "pending" | "current" | "completed" | "failed";
   message: string;
   error_message: string | null;
-  created_at: string;
+  created_at: string | null;
 };
 
 type TimelineStepStatus = "pending" | "current" | "completed" | "failed";
@@ -221,15 +221,27 @@ function formatProcessingStatus(status: string) {
   return status.replace("_", " ");
 }
 
-function formatTimelineTimestamp(timestamp: string | null) {
+function getValidTimestamp(timestamp: string | null | undefined) {
   if (!timestamp) {
     return null;
+  }
+
+  const date = new Date(timestamp);
+
+  return Number.isNaN(date.getTime()) ? null : date.getTime();
+}
+
+function formatTimelineTimestamp(timestamp: string | null | undefined) {
+  const time = getValidTimestamp(timestamp);
+
+  if (time === null) {
+    return "Time unavailable";
   }
 
   return new Intl.DateTimeFormat(undefined, {
     dateStyle: "medium",
     timeStyle: "short"
-  }).format(new Date(timestamp));
+  }).format(new Date(time));
 }
 
 function buildProcessingTimeline(
@@ -237,8 +249,10 @@ function buildProcessingTimeline(
   events: ProcessingEvent[]
 ): TimelineStep[] {
   const orderedEvents = [...events].sort((left, right) => {
+    const leftTime = getValidTimestamp(left.created_at);
+    const rightTime = getValidTimestamp(right.created_at);
     const timeDiff =
-      new Date(left.created_at).getTime() - new Date(right.created_at).getTime();
+      leftTime === null || rightTime === null ? 0 : leftTime - rightTime;
 
     if (timeDiff !== 0) {
       return timeDiff;
@@ -261,12 +275,17 @@ function buildProcessingTimeline(
           return true;
         }
 
-        const eventTime = new Date(event.created_at).getTime();
-        const afterTime = new Date(afterEvent.created_at).getTime();
+        const eventTime = getValidTimestamp(event.created_at);
+        const afterTime = getValidTimestamp(afterEvent.created_at);
 
         return (
-          eventTime > afterTime ||
-          (eventTime === afterTime && event.event_order >= afterEvent.event_order)
+          (eventTime !== null &&
+            afterTime !== null &&
+            eventTime > afterTime) ||
+          ((eventTime === null ||
+            afterTime === null ||
+            eventTime === afterTime) &&
+            event.event_order >= afterEvent.event_order)
         );
       });
   const queued = latest((event) => event.event_type === "queued");
@@ -1254,11 +1273,9 @@ export function MeetingDetail({ meetingId }: { meetingId: string }) {
                       {step.status}
                     </span>
                   </div>
-                  {formatTimelineTimestamp(step.timestamp) ? (
-                    <p className="mt-2 text-xs text-slate-500">
-                      {formatTimelineTimestamp(step.timestamp)}
-                    </p>
-                  ) : null}
+                  <p className="mt-2 text-xs text-slate-500">
+                    {formatTimelineTimestamp(step.timestamp)}
+                  </p>
                   {step.errorMessage ? (
                     <p className="mt-3 rounded-md border border-red-200 bg-white p-3 text-sm text-red-700">
                       {step.errorMessage}

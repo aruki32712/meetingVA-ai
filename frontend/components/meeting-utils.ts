@@ -9,12 +9,26 @@ export function formatDuration(totalSeconds: number | null) {
   return `${minutes}:${seconds.toString().padStart(2, "0")}`;
 }
 
-export function formatDate(dateValue: string) {
+export function formatDate(dateValue: string | null | undefined) {
+  if (!dateValue) {
+    return "Date unavailable";
+  }
+
+  const date = new Date(
+    /^\d{4}-\d{2}-\d{2}$/.test(dateValue)
+      ? `${dateValue}T00:00:00`
+      : dateValue
+  );
+
+  if (Number.isNaN(date.getTime())) {
+    return "Date unavailable";
+  }
+
   return new Intl.DateTimeFormat("en", {
     month: "short",
     day: "numeric",
     year: "numeric"
-  }).format(new Date(`${dateValue}T00:00:00`));
+  }).format(date);
 }
 
 export function getTodayInputValue() {
