@@ -380,27 +380,35 @@ export function NewMeetingRecorder() {
       setUploadProgress(75);
       setSaveStatus("Saving meeting metadata...");
 
-      const { error: insertError } = await supabase.from("meetings").insert({
-        id: meetingId,
-        owner_id: userId,
-        title: title.trim(),
-        description: description.trim() || null,
-        scheduled_at: `${meetingDate}T00:00:00.000Z`,
-        audio_storage_path: storagePath,
-        duration_seconds: elapsedSeconds,
-        status: "completed",
-        source: "browser_recording"
-      });
+      const { data: createdMeeting, error: insertError } = await supabase
+        .from("meetings")
+        .insert({
+          id: meetingId,
+          owner_id: userId,
+          title: title.trim(),
+          description: description.trim() || null,
+          scheduled_at: `${meetingDate}T00:00:00.000Z`,
+          audio_storage_path: storagePath,
+          duration_seconds: elapsedSeconds,
+          status: "completed",
+          source: "browser_recording"
+        })
+        .select("id")
+        .single();
 
-      if (insertError) {
+      if (insertError || !createdMeeting) {
         await supabase.storage.from("meeting-audio").remove([storagePath]);
-        throw new Error(`Meeting creation failed: ${insertError.message}`);
+        throw new Error(
+          `Meeting creation failed: ${
+            insertError?.message ?? "Supabase did not return the new meeting ID."
+          }`
+        );
       }
 
       const { error: attachmentError } = await supabase
         .from("attachments")
         .insert({
-          meeting_id: meetingId,
+          meeting_id: createdMeeting.id,
           uploaded_by: userId,
           kind: "audio",
           file_name: `recording.${extension}`,
@@ -418,7 +426,7 @@ export function NewMeetingRecorder() {
 
       setUploadProgress(100);
       setSaveStatus("Meeting saved.");
-      router.push(`/dashboard/meetings/${meetingId}`);
+      router.push(`/dashboard/meetings/${createdMeeting.id}`);
     } catch (error) {
       setUploadProgress(0);
       setSaveError(

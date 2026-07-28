@@ -164,6 +164,23 @@ function sleep(milliseconds: number) {
   });
 }
 
+function getErrorMessage(error: unknown, fallback: string) {
+  if (error instanceof Error) {
+    return error.message;
+  }
+
+  if (
+    typeof error === "object" &&
+    error !== null &&
+    "message" in error &&
+    typeof error.message === "string"
+  ) {
+    return error.message;
+  }
+
+  return fallback;
+}
+
 function toMeetingStatus(processingStatus: string) {
   if (
     processingStatus === "completed" ||
@@ -450,12 +467,19 @@ export function MeetingDetail({ meetingId }: { meetingId: string }) {
 
   const loadMeeting = useCallback(async () => {
     const supabase = createBrowserSupabaseClient();
+    const { data: userData, error: userError } = await supabase.auth.getUser();
+
+    if (userError || !userData.user) {
+      throw userError ?? new Error("You must be signed in to view this meeting.");
+    }
+
     const { data, error: meetingError } = await supabase
       .from("meetings")
       .select(
         "id,title,description,status,scheduled_at,audio_storage_path,duration_seconds,created_at"
       )
       .eq("id", meetingId)
+      .eq("owner_id", userData.user.id)
       .single();
 
     if (meetingError) {
@@ -649,12 +673,12 @@ export function MeetingDetail({ meetingId }: { meetingId: string }) {
           setActivityEvents(result.activityEvents);
         }
       } catch (loadError) {
+        if (process.env.NODE_ENV === "development") {
+          console.error("Unable to load meeting", loadError);
+        }
+
         if (isMounted) {
-          setError(
-            loadError instanceof Error
-              ? loadError.message
-              : "Unable to load meeting."
-          );
+          setError(getErrorMessage(loadError, "Unable to load meeting."));
         }
       } finally {
         if (isMounted) {
