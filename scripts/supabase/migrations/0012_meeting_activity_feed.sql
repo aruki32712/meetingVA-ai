@@ -51,7 +51,7 @@ using (
     select 1
     from public.meetings
     where meetings.id = meeting_activity_events.meeting_id
-      and (meetings.owner_id = auth.uid() or meetings.user_id = auth.uid())
+      and meetings.owner_id = auth.uid()
   )
 );
 
@@ -71,7 +71,7 @@ insert into public.meeting_activity_events (
 )
 select
   meetings.id,
-  coalesce(meetings.owner_id, meetings.user_id),
+  meetings.owner_id,
   'meeting_created',
   'system',
   'MeetingVA AI',
@@ -94,7 +94,7 @@ insert into public.meeting_activity_events (
 )
 select
   meetings.id,
-  coalesce(meetings.owner_id, meetings.user_id),
+  meetings.owner_id,
   'audio_uploaded',
   'system',
   'MeetingVA AI',
@@ -121,7 +121,7 @@ insert into public.meeting_activity_events (
 )
 select
   processing_jobs.meeting_id,
-  coalesce(meetings.owner_id, meetings.user_id),
+  meetings.owner_id,
   case processing_jobs.job_type
     when 'transcription' then 'transcription_queued'
     when 'analysis' then 'analysis_queued'
@@ -159,7 +159,7 @@ insert into public.meeting_activity_events (
 )
 select
   processing_jobs.meeting_id,
-  coalesce(meetings.owner_id, meetings.user_id),
+  meetings.owner_id,
   case processing_jobs.job_type
     when 'transcription' then 'transcription_started'
     when 'analysis' then 'analysis_started'
@@ -199,7 +199,7 @@ insert into public.meeting_activity_events (
 )
 select
   processing_jobs.meeting_id,
-  coalesce(meetings.owner_id, meetings.user_id),
+  meetings.owner_id,
   case
     when processing_jobs.status = 'transcribed' then 'transcription_completed'
     when processing_jobs.status = 'analyzed' then 'analysis_completed'
@@ -246,7 +246,7 @@ insert into public.meeting_activity_events (
 )
 select
   participants.meeting_id,
-  coalesce(meetings.owner_id, meetings.user_id),
+  meetings.owner_id,
   'speaker_detected',
   'worker',
   'MeetingVA worker',
@@ -274,7 +274,7 @@ as $$
 declare
   event_owner uuid;
 begin
-  event_owner := coalesce(new.owner_id, new.user_id);
+  event_owner := new.owner_id;
 
   if event_owner is null then
     return new;
@@ -358,7 +358,7 @@ declare
   activity_description text;
   activity_created_at timestamptz;
 begin
-  select coalesce(owner_id, user_id)
+  select owner_id
   into event_owner
   from public.meetings
   where id = new.meeting_id;
@@ -524,7 +524,7 @@ declare
   event_owner uuid;
   confidence numeric;
 begin
-  select coalesce(owner_id, user_id)
+  select owner_id
   into event_owner
   from public.meetings
   where id = new.meeting_id;

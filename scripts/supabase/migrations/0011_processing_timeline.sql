@@ -43,7 +43,7 @@ using (
     select 1
     from public.meetings
     where meetings.id = processing_events.meeting_id
-      and (meetings.owner_id = auth.uid() or meetings.user_id = auth.uid())
+      and meetings.owner_id = auth.uid()
   )
 );
 
@@ -60,7 +60,7 @@ insert into public.processing_events (
 )
 select
   meetings.id,
-  coalesce(meetings.owner_id, meetings.user_id),
+  meetings.owner_id,
   'meeting_created',
   'completed',
   'Meeting record created.',
@@ -77,7 +77,7 @@ insert into public.processing_events (
 )
 select
   meetings.id,
-  coalesce(meetings.owner_id, meetings.user_id),
+  meetings.owner_id,
   'audio_uploaded',
   'completed',
   'Audio is securely stored and ready to process.',
@@ -97,7 +97,7 @@ insert into public.processing_events (
 )
 select
   processing_jobs.meeting_id,
-  coalesce(meetings.owner_id, meetings.user_id),
+  meetings.owner_id,
   processing_jobs.id,
   processing_jobs.job_type,
   'queued',
@@ -122,7 +122,7 @@ insert into public.processing_events (
 )
 select
   processing_jobs.meeting_id,
-  coalesce(meetings.owner_id, meetings.user_id),
+  meetings.owner_id,
   processing_jobs.id,
   processing_jobs.job_type,
   case processing_jobs.job_type
@@ -156,7 +156,7 @@ insert into public.processing_events (
 )
 select
   processing_jobs.meeting_id,
-  coalesce(meetings.owner_id, meetings.user_id),
+  meetings.owner_id,
   processing_jobs.id,
   processing_jobs.job_type,
   case
@@ -191,7 +191,7 @@ begin
     )
     values (
       new.id,
-      coalesce(new.owner_id, new.user_id),
+      new.owner_id,
       'meeting_created',
       'completed',
       'Meeting record created.',
@@ -204,7 +204,7 @@ begin
       )
       values (
         new.id,
-        coalesce(new.owner_id, new.user_id),
+        new.owner_id,
         'audio_uploaded',
         'completed',
         'Audio is securely stored and ready to process.',
@@ -217,7 +217,7 @@ begin
     )
     values (
       new.id,
-      coalesce(new.owner_id, new.user_id),
+      new.owner_id,
       'audio_uploaded',
       'completed',
       'Audio is securely stored and ready to process.',
@@ -245,7 +245,7 @@ declare
   timeline_status text;
   timeline_message text;
 begin
-  select coalesce(owner_id, user_id)
+  select owner_id
   into event_owner
   from public.meetings
   where id = new.meeting_id;

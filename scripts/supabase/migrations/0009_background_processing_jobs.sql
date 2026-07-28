@@ -48,7 +48,7 @@ for select
 using (exists (
   select 1 from public.meetings
   where meetings.id = processing_jobs.meeting_id
-    and (meetings.owner_id = auth.uid() or meetings.user_id = auth.uid())
+    and meetings.owner_id = auth.uid()
 ));
 
 comment on table public.processing_jobs is
