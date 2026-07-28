@@ -27,7 +27,7 @@ of done changes.
 - [ ] RLS policies allow users to access only their own meetings and project progress data.
 - [ ] Service role key is present only in backend and worker environments.
 - [ ] `audit_logs` table exists after migration `0008_security_foundation.sql`.
-- [ ] `meeting_activity_events` table exists after migration `0012_meeting_activity_feed.sql`.
+- [ ] `processing_events` exists after the processing timeline migrations.
 - [ ] Cross-user reads and writes are rejected for meetings, participants, transcripts, action items, decisions, questions, tags, and attachments.
 - [ ] Cross-user reads are rejected for meeting activity events.
 

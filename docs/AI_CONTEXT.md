@@ -48,7 +48,7 @@ Walter Labs AI is the operating company context for this repository. The operati
 13. Search UI calls the authenticated `search_meetings` Supabase RPC, which
     searches only the current user's RLS-visible meetings and returns ranked
     excerpts.
-14. Meeting detail shows a permanent activity feed from `meeting_activity_events`
+14. Meeting detail shows the processing timeline from `processing_events`
     for meeting creation, upload, processing, retry, speaker detection, and owner
     speaker corrections.
 
@@ -68,7 +68,6 @@ Walter Labs AI is the operating company context for this repository. The operati
 - `meetings.processing_status` drives user-visible workflow state.
 - `processing_jobs` stores durable background job lifecycle state for transcription and analysis.
 - `processing_events` powers the visual processing timeline.
-- `meeting_activity_events` stores the permanent owner-scoped meeting history/audit feed.
 - `meetings.owner_id` and `meetings.user_id` are both used for ownership compatibility.
 - `audio_storage_path` points to the private source recording in `meeting-audio`.
 - `participants.display_name` is the editable human-facing speaker name.

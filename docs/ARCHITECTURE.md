@@ -99,7 +99,7 @@ Background processing is tracked in `processing_jobs` with `meeting_id`,
 `retry_count`, and `worker_version`. RLS allows users to read only jobs for
 their own meetings; backend and worker writes use the service role.
 
-Meeting activity history is stored in `meeting_activity_events`. The table is
+Meeting processing history is stored in `processing_events`. The table is
 owner-scoped through `meeting_id` and `user_id`, has RLS enabled, and is
 read-only to authenticated users. Trusted database triggers record meeting
 creation, audio upload, processing lifecycle, worker retry, and speaker

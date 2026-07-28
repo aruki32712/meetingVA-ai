@@ -78,7 +78,7 @@ Every future Codex task must update this file if the definition of done changes.
 - [ ] No migration weakens existing user-data isolation.
 - [ ] Search indexes cover the searchable meeting and related-record text.
 - [ ] Search RPC remains `security invoker`, requires `auth.uid()`, and returns only owned meetings.
-- [ ] `meeting_activity_events` is owner-scoped, RLS-enabled, indexed by meeting/user/time, and write-restricted to trusted backend/service paths.
+- [ ] `processing_events` is owner-scoped, RLS-enabled, indexed, and write-restricted to trusted backend/service paths.
 
 ## 6. Supabase/RLS Validation
 

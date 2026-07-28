@@ -20,7 +20,6 @@ type AttachmentKind = "audio" | "transcript" | "document" | "image" | "other";
 type TranscriptKind = "original" | "translated" | "both";
 type ProcessingJobType = "transcription" | "analysis";
 type ProcessingEventStatus = "pending" | "current" | "completed" | "failed";
-type ActivityActorType = "system" | "owner" | "worker";
 
 type Database = {
   public: {
@@ -163,53 +162,6 @@ type Database = {
         Relationships: [
           {
             foreignKeyName: "processing_events_meeting_id_fkey";
-            columns: ["meeting_id"];
-            isOneToOne: false;
-            referencedRelation: "meetings";
-            referencedColumns: ["id"];
-          }
-        ];
-      };
-      meeting_activity_events: {
-        Row: {
-          id: string;
-          meeting_id: string;
-          user_id: string;
-          event_type: string;
-          actor_type: ActivityActorType;
-          actor_label: string;
-          title: string;
-          description: string | null;
-          metadata: Record<string, unknown>;
-          created_at: string;
-        };
-        Insert: {
-          id?: string;
-          meeting_id: string;
-          user_id: string;
-          event_type: string;
-          actor_type: ActivityActorType;
-          actor_label: string;
-          title: string;
-          description?: string | null;
-          metadata?: Record<string, unknown>;
-          created_at?: string;
-        };
-        Update: {
-          id?: string;
-          meeting_id?: string;
-          user_id?: string;
-          event_type?: string;
-          actor_type?: ActivityActorType;
-          actor_label?: string;
-          title?: string;
-          description?: string | null;
-          metadata?: Record<string, unknown>;
-          created_at?: string;
-        };
-        Relationships: [
-          {
-            foreignKeyName: "meeting_activity_events_meeting_id_fkey";
             columns: ["meeting_id"];
             isOneToOne: false;
             referencedRelation: "meetings";
