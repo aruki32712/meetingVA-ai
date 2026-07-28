@@ -22,6 +22,12 @@ settings = get_settings()
 logger = logging.getLogger(__name__)
 RateLimitKey = tuple[str, str]
 ai_rate_limit_events: dict[RateLimitKey, deque[float]] = defaultdict(deque)
+CORS_ORIGIN_REGEX = (
+    r"^(?:"
+    r"http://localhost(?::\d+)?"
+    r"|https://meeting-va-[a-z0-9-]+-aruki32712-1048s-projects\.vercel\.app"
+    r")$"
+)
 
 app = FastAPI(
     title=settings.app_name,
@@ -32,9 +38,10 @@ app = FastAPI(
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.allowed_cors_origins,
+    allow_origin_regex=CORS_ORIGIN_REGEX,
     allow_credentials=True,
-    allow_methods=["GET", "POST", "PATCH", "OPTIONS"],
-    allow_headers=["Authorization", "Content-Type"],
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 
