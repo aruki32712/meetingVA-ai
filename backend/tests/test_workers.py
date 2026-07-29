@@ -49,13 +49,12 @@ def test_celery_uses_redis_broker_and_result_backend() -> None:
     assert celery_app.conf.task_track_started is True
 
 
-def test_processing_job_started_updates_job_and_meeting_status() -> None:
+def test_processing_job_started_updates_job_status() -> None:
     client = FakeSupabaseClient()
 
     _mark_processing_job_started(
         client,
         job_id="job-id",
-        meeting_id="meeting-id",
         status="transcribing",
         retry_count=2,
     )
@@ -63,11 +62,10 @@ def test_processing_job_started_updates_job_and_meeting_status() -> None:
     assert client.updates[0]["table"] == "processing_jobs"
     assert client.updates[0]["values"]["status"] == "transcribing"
     assert client.updates[0]["values"]["retry_count"] == 2
-    assert client.updates[1]["table"] == "meetings"
-    assert client.updates[1]["values"] == {"processing_status": "transcribing"}
+    assert len(client.updates) == 1
 
 
-def test_processing_job_terminal_helpers_update_job_and_meeting_status() -> None:
+def test_processing_job_terminal_helpers_update_job_status() -> None:
     completed_client = FakeSupabaseClient()
     failed_client = FakeSupabaseClient()
     cancelled_client = FakeSupabaseClient()
@@ -75,25 +73,22 @@ def test_processing_job_terminal_helpers_update_job_and_meeting_status() -> None
     _mark_processing_job_completed(
         completed_client,
         job_id="job-id",
-        meeting_id="meeting-id",
         status="transcribed",
     )
     _mark_processing_job_failed(
         failed_client,
         job_id="job-id",
-        meeting_id="meeting-id",
         error_message="OpenAI timeout",
     )
     _mark_processing_job_cancelled(
         cancelled_client,
         job_id="job-id",
-        meeting_id="meeting-id",
     )
 
     assert completed_client.updates[0]["values"]["status"] == "transcribed"
-    assert completed_client.updates[1]["values"] == {"processing_status": "transcribed"}
+    assert len(completed_client.updates) == 1
     assert failed_client.updates[0]["values"]["status"] == "failed"
     assert failed_client.updates[0]["values"]["error_message"] == "OpenAI timeout"
-    assert failed_client.updates[1]["values"] == {"processing_status": "failed"}
+    assert len(failed_client.updates) == 1
     assert cancelled_client.updates[0]["values"]["status"] == "cancelled"
-    assert cancelled_client.updates[1]["values"] == {"processing_status": "cancelled"}
+    assert len(cancelled_client.updates) == 1

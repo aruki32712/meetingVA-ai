@@ -1,16 +1,7 @@
-create type public.meeting_processing_status as enum (
-  'draft',
-  'uploaded',
-  'processing',
-  'completed',
-  'failed'
-);
-
 alter table public.meetings
 add column meeting_date date,
 add column audio_storage_path text,
 add column duration_seconds integer check (duration_seconds is null or duration_seconds >= 0),
-add column processing_status public.meeting_processing_status not null default 'draft',
 add column tags text[] not null default '{}';
 
 update public.meetings
@@ -22,7 +13,6 @@ alter table public.meetings
 alter column meeting_date set not null;
 
 create index meetings_meeting_date_idx on public.meetings(meeting_date desc);
-create index meetings_processing_status_idx on public.meetings(processing_status);
 
 insert into storage.buckets (id, name, public)
 values ('meeting-audio', 'meeting-audio', false)

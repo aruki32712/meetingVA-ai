@@ -1,6 +1,3 @@
-alter type public.meeting_processing_status add value if not exists 'queued';
-alter type public.meeting_processing_status add value if not exists 'cancelled';
-
 create type public.processing_job_type as enum (
   'transcription',
   'analysis'

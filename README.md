@@ -135,8 +135,8 @@ Authentication routes:
 After a meeting recording is uploaded, open its meeting detail page and use
 Generate Transcript. Optionally enable English translation for non-English
 audio. The frontend sends the Supabase access token and translation preference
-to the backend, which verifies meeting ownership, creates a durable
-`processing_jobs` row, sets `meetings.processing_status` to `queued`, enqueues
+to the backend, which verifies meeting ownership, creates a durable queued
+`processing_jobs` row, enqueues
 a Celery job, and returns a `job_id`. The frontend polls job status every 5
 seconds without freezing the page.
 The Celery worker downloads the private audio object from Supabase Storage,
@@ -150,7 +150,7 @@ The backend verifies meeting ownership, sets the meeting to `analyzing`,
 enqueues a Celery job, and returns a `job_id`. The worker sends the transcript
 to OpenAI, stores the executive summary and meeting brief on `meetings`,
 replaces generated `action_items`, `decisions`, and `questions`, and updates
-`meetings.processing_status` through `analyzed` or `failed`.
+`processing_jobs.status` through `analyzed` or `failed`.
 
 The MVP supports multilingual transcription and optional English transcripts
 for non-English audio while preserving original transcript text where possible.

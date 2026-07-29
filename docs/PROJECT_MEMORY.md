@@ -14,7 +14,7 @@ OpenAI transcription, translation, and analysis calls run from the backend/worke
 
 ### Use Celery And Redis For Long-Running Jobs
 
-Transcription and analysis can take longer than normal HTTP requests. FastAPI validates ownership and enqueues work; Celery workers perform side effects and update `meetings.processing_status`.
+Transcription and analysis can take longer than normal HTTP requests. FastAPI validates ownership and enqueues work; Celery workers perform side effects and update `processing_jobs.status`.
 
 ### Track Background Jobs Durably
 
@@ -22,7 +22,7 @@ Celery and Redis provide queue execution state, but MeetingVA AI also stores `pr
 
 ### Store Processing State On Meetings
 
-The app uses `meetings.processing_status` as the user-visible workflow state for upload, transcription, analysis, and failures. This keeps frontend polling straightforward and database-visible.
+The app uses `processing_jobs.status` as the durable workflow state for transcription, analysis, cancellation, and failures. The API exposes that job status to frontend polling.
 
 ### Preserve Original And Translated Transcript Text
 

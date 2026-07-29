@@ -27,7 +27,7 @@
 - Confirm meeting ownership before mutating meeting-related data.
 - Keep OpenAI and Supabase service role credentials server-side.
 - Keep long-running work in Celery tasks.
-- Set clear `processing_status` values before and after queued work.
+- Set clear `processing_jobs.status` values before and after queued work.
 - Raise useful HTTP errors without leaking secrets or provider internals.
 - Add tests for helper logic and endpoint behavior when backend behavior changes.
 
@@ -59,4 +59,3 @@
 - Check `git status --short` before committing.
 - Do not revert unrelated user changes.
 - Use `main` as the current production-intent branch unless the owner changes the workflow.
-

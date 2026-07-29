@@ -175,8 +175,8 @@ MeetingVA AI is not HIPAA compliant today. HIPAA, SOC 2, or paid enterprise comp
 4. The meeting detail page calls the backend transcription endpoint with the
    user's Supabase access token and translation preference.
 5. The backend validates the token, confirms the meeting belongs to the user,
-   creates a `processing_jobs` row, sets `meetings.processing_status` to
-   `queued`, enqueues a Celery job, and returns `meeting_id`, `job_id`, and
+   creates a queued `processing_jobs` row, enqueues a Celery job, and returns
+   `meeting_id`, `job_id`, and
    `processing_status`.
 6. The frontend polls the protected job status endpoint and refreshes meeting
    data while processing continues.
@@ -201,7 +201,7 @@ MeetingVA AI is not HIPAA compliant today. HIPAA, SOC 2, or paid enterprise comp
    activity feed so users can audit what happened and identify speaker
    corrections that needed owner intervention.
 
-The current processing status flow uses `meetings.processing_status` values:
+The current processing status flow uses `processing_jobs.status` values:
 
 - `uploaded`
 - `queued`

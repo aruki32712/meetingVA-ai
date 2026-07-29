@@ -276,8 +276,7 @@ customer data during deployment validation.
      test.
 7. Failure visibility:
    - If transcription or analysis fails, check Render backend logs, Render
-     worker logs, the `processing_jobs` row, and the meeting
-     `processing_status`.
+     worker logs, and the `processing_jobs.status` value.
 8. Operational readiness:
    - Confirm the activity feed and processing timeline show the completed test.
    - Confirm frontend and backend health endpoints are monitored.

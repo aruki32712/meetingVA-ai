@@ -40,7 +40,6 @@ def transcribe_meeting_task(
     _mark_processing_job_started(
         service_client,
         job_id=job_id,
-        meeting_id=meeting_id,
         status="transcribing",
         retry_count=getattr(self.request, "retries", 0),
     )
@@ -58,7 +57,6 @@ def transcribe_meeting_task(
         _mark_processing_job_failed(
             service_client,
             job_id=job_id,
-            meeting_id=meeting_id,
             error_message=str(exc),
         )
         raise
@@ -71,7 +69,6 @@ def transcribe_meeting_task(
     _mark_processing_job_completed(
         service_client,
         job_id=job_id,
-        meeting_id=meeting_id,
         status="transcribed",
     )
     return result

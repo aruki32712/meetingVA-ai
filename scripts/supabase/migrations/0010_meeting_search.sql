@@ -75,13 +75,26 @@ as $$
       end as query
   ),
   eligible_meetings as (
-    select m.*
+    select
+      m.*,
+      latest_job.status::text as processing_status
     from public.meetings m
+    left join lateral (
+      select processing_jobs.status
+      from public.processing_jobs
+      where processing_jobs.meeting_id = m.id
+      order by processing_jobs.created_at desc
+      limit 1
+    ) latest_job on true
     where auth.uid() is not null
       and m.owner_id = auth.uid()
       and (date_from is null or m.meeting_date >= date_from)
       and (date_to is null or m.meeting_date <= date_to)
-      and (status_filter is null or status_filter = '' or m.processing_status::text = status_filter)
+      and (
+        status_filter is null
+        or status_filter = ''
+        or latest_job.status::text = status_filter
+      )
       and (
         participant_filter is null
         or participant_filter = ''
@@ -183,7 +196,7 @@ as $$
     m.id,
     m.title,
     m.meeting_date,
-    m.processing_status::text,
+    m.processing_status,
     case
       when bm.query is null then left(coalesce(nullif(bm.content, ''), m.description, m.title), 240)
       else ts_headline(

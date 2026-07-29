@@ -65,7 +65,7 @@ Walter Labs AI is the operating company context for this repository. The operati
 
 ## Important Data Concepts
 
-- `meetings.processing_status` drives user-visible workflow state.
+- `processing_jobs.status` is the authoritative processing lifecycle state.
 - `processing_jobs` stores durable background job lifecycle state for transcription and analysis.
 - `processing_events` powers the visual processing timeline.
 - `meetings.owner_id` is the canonical meeting ownership field.

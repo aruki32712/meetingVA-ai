@@ -348,9 +348,7 @@ def _require_user_id(token: str) -> str:
 def _require_owned_meeting(service_client: Any, meeting_id: str, user_id: str) -> dict[str, Any]:
     meeting_response = (
         service_client.table("meetings")
-        .select(
-            "id,owner_id,title,audio_storage_path,duration_seconds,processing_status"
-        )
+        .select("id,owner_id,title,audio_storage_path,duration_seconds")
         .eq("id", meeting_id)
         .eq("owner_id", user_id)
         .limit(1)
@@ -362,15 +360,6 @@ def _require_owned_meeting(service_client: Any, meeting_id: str, user_id: str) -
         raise HTTPException(status_code=404, detail="Meeting was not found.")
 
     return meeting
-
-
-def _update_meeting_status(service_client: Any, meeting_id: str, status: str) -> None:
-    (
-        service_client.table("meetings")
-        .update({"processing_status": status})
-        .eq("id", meeting_id)
-        .execute()
-    )
 
 
 def _create_processing_job(
@@ -442,7 +431,6 @@ def _mark_processing_job_started(
     service_client: Any,
     *,
     job_id: str,
-    meeting_id: str,
     status: str,
     retry_count: int = 0,
 ) -> None:
@@ -456,14 +444,12 @@ def _mark_processing_job_started(
             "worker_version": settings.worker_version,
         },
     )
-    _update_meeting_status(service_client, meeting_id, status)
 
 
 def _mark_processing_job_completed(
     service_client: Any,
     *,
     job_id: str,
-    meeting_id: str,
     status: str,
 ) -> None:
     _update_processing_job(
@@ -475,14 +461,12 @@ def _mark_processing_job_completed(
             "error_message": None,
         },
     )
-    _update_meeting_status(service_client, meeting_id, status)
 
 
 def _mark_processing_job_failed(
     service_client: Any,
     *,
     job_id: str,
-    meeting_id: str,
     error_message: str,
 ) -> None:
     safe_error = error_message[:1000] if error_message else "Job failed."
@@ -495,14 +479,12 @@ def _mark_processing_job_failed(
             "error_message": safe_error,
         },
     )
-    _update_meeting_status(service_client, meeting_id, "failed")
 
 
 def _mark_processing_job_cancelled(
     service_client: Any,
     *,
     job_id: str,
-    meeting_id: str,
 ) -> None:
     logger.info("processing job cancelled", extra={"job_id": job_id})
     _update_processing_job(
@@ -514,11 +496,19 @@ def _mark_processing_job_cancelled(
             "error_message": None,
         },
     )
-    _update_meeting_status(service_client, meeting_id, "cancelled")
 
 
-def _ensure_not_processing(meeting: dict[str, Any]) -> None:
-    if meeting.get("processing_status") in ACTIVE_PROCESSING_STATUSES:
+def _ensure_not_processing(service_client: Any, meeting_id: str) -> None:
+    response = (
+        service_client.table("processing_jobs")
+        .select("id")
+        .eq("meeting_id", meeting_id)
+        .in_("status", sorted(ACTIVE_PROCESSING_STATUSES))
+        .limit(1)
+        .execute()
+    )
+
+    if response.data:
         raise HTTPException(status_code=409, detail="Meeting is already processing.")
 
 
@@ -909,7 +899,6 @@ async def _run_transcribe_meeting_job(
     service_client = get_supabase_service_client()
 
     if _processing_job_is_cancelled(service_client, job_id):
-        _update_meeting_status(service_client, meeting_id, "cancelled")
         return {
             "meeting_id": meeting_id,
             "job_id": job_id,
@@ -934,19 +923,11 @@ async def _run_transcribe_meeting_job(
         raise HTTPException(status_code=400, detail="Meeting has no audio file.")
 
     try:
-        (
-            service_client.table("meetings")
-            .update({"processing_status": "transcribing"})
-            .eq("id", meeting_id)
-            .execute()
-        )
-
         audio_bytes = service_client.storage.from_("meeting-audio").download(
             audio_storage_path
         )
 
         if _processing_job_is_cancelled(service_client, job_id):
-            _update_meeting_status(service_client, meeting_id, "cancelled")
             return {
                 "meeting_id": meeting_id,
                 "job_id": job_id,
@@ -1012,7 +993,6 @@ async def _run_transcribe_meeting_job(
             service_client.table("meetings")
             .update(
                 {
-                    "processing_status": "transcribed",
                     "detected_language": detected_language,
                     "transcript_language": transcript_language,
                     "translation_language": translation_language,
@@ -1024,10 +1004,8 @@ async def _run_transcribe_meeting_job(
             .execute()
         )
     except HTTPException:
-        _update_meeting_status(service_client, meeting_id, "failed")
         raise
     except Exception as exc:
-        _update_meeting_status(service_client, meeting_id, "failed")
         raise HTTPException(
             status_code=500,
             detail="Unable to transcribe meeting audio.",
@@ -1053,7 +1031,6 @@ async def _run_analyze_meeting_job(
     service_client = get_supabase_service_client()
 
     if _processing_job_is_cancelled(service_client, job_id):
-        _update_meeting_status(service_client, meeting_id, "cancelled")
         return {
             "meeting_id": meeting_id,
             "job_id": job_id,
@@ -1062,7 +1039,7 @@ async def _run_analyze_meeting_job(
 
     meeting_response = (
         service_client.table("meetings")
-        .select("id,title,processing_status")
+        .select("id,title")
         .eq("id", meeting_id)
         .limit(1)
         .execute()
@@ -1083,17 +1060,9 @@ async def _run_analyze_meeting_job(
     transcript = _format_transcript_for_analysis(transcript_segments)
 
     if not transcript:
-        _update_meeting_status(service_client, meeting_id, "failed")
         raise HTTPException(status_code=400, detail="Meeting has no transcript.")
 
     try:
-        (
-            service_client.table("meetings")
-            .update({"processing_status": "analyzing"})
-            .eq("id", meeting_id)
-            .execute()
-        )
-
         analysis = await _analyze_transcript_with_openai(
             meeting_title=meeting.get("title") or "Untitled meeting",
             transcript=transcript,
@@ -1117,17 +1086,14 @@ async def _run_analyze_meeting_job(
                 {
                     "summary": analysis["executive_summary"],
                     "brief": analysis["meeting_brief"],
-                    "processing_status": "analyzed",
                 }
             )
             .eq("id", meeting_id)
             .execute()
         )
     except HTTPException:
-        _update_meeting_status(service_client, meeting_id, "failed")
         raise
     except Exception as exc:
-        _update_meeting_status(service_client, meeting_id, "failed")
         raise HTTPException(
             status_code=500,
             detail="Unable to analyze meeting transcript.",
@@ -1159,7 +1125,7 @@ async def transcribe_meeting(
     user_id = _require_user_id(token)
     _enforce_ai_rate_limit(user_id, "transcribe")
     meeting = _require_owned_meeting(service_client, meeting_id, user_id)
-    _ensure_not_processing(meeting)
+    _ensure_not_processing(service_client, meeting_id)
 
     if not meeting.get("audio_storage_path"):
         raise HTTPException(status_code=400, detail="Meeting has no audio file.")
@@ -1171,8 +1137,6 @@ async def transcribe_meeting(
         meeting_id=meeting_id,
         job_type="transcription",
     )
-    _update_meeting_status(service_client, meeting_id, "queued")
-
     from app.workers.transcription_worker import transcribe_meeting_task
 
     try:
@@ -1188,7 +1152,6 @@ async def transcribe_meeting(
         _mark_processing_job_failed(
             service_client,
             job_id=job_id,
-            meeting_id=meeting_id,
             error_message="Unable to enqueue transcription job.",
         )
         raise HTTPException(
@@ -1217,8 +1180,8 @@ async def analyze_meeting(
     service_client = get_supabase_service_client()
     user_id = _require_user_id(token)
     _enforce_ai_rate_limit(user_id, "analyze")
-    meeting = _require_owned_meeting(service_client, meeting_id, user_id)
-    _ensure_not_processing(meeting)
+    _require_owned_meeting(service_client, meeting_id, user_id)
+    _ensure_not_processing(service_client, meeting_id)
 
     transcript_response = (
         service_client.table("transcript_segments")
@@ -1238,8 +1201,6 @@ async def analyze_meeting(
         meeting_id=meeting_id,
         job_type="analysis",
     )
-    _update_meeting_status(service_client, meeting_id, "queued")
-
     from app.workers.analysis_worker import analyze_meeting_task
 
     try:
@@ -1251,7 +1212,6 @@ async def analyze_meeting(
         _mark_processing_job_failed(
             service_client,
             job_id=job_id,
-            meeting_id=meeting_id,
             error_message="Unable to enqueue analysis job.",
         )
         raise HTTPException(
@@ -1277,7 +1237,7 @@ async def get_meeting_job_status(
     token = _require_bearer_token(authorization)
     service_client = get_supabase_service_client()
     user_id = _require_user_id(token)
-    meeting = _require_owned_meeting(service_client, meeting_id, user_id)
+    _require_owned_meeting(service_client, meeting_id, user_id)
     processing_job = _get_processing_job(
         service_client,
         job_id=job_id,
@@ -1314,7 +1274,7 @@ async def get_meeting_job_status(
         "successful": successful,
         "failed": failed or processing_job.get("status") == "failed",
         "error_message": processing_job.get("error_message"),
-        "processing_status": meeting.get("processing_status"),
+        "processing_status": processing_job.get("status"),
     }
 
 
@@ -1356,7 +1316,6 @@ async def cancel_meeting_job(
     _mark_processing_job_cancelled(
         service_client,
         job_id=job_id,
-        meeting_id=meeting_id,
     )
 
     return {

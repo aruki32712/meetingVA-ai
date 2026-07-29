@@ -107,7 +107,7 @@ Owner checks:
 
 - Worker is deployed whenever backend is deployed.
 - Backend and worker point to the same Redis instance.
-- Job status is visible through `meetings.processing_status`.
+- Job status is visible through `processing_jobs.status`.
 - Render worker logs are inspected when AI jobs fail.
 
 ## OpenAI
@@ -152,4 +152,3 @@ Minimum release gates:
 - Backend compile passes.
 - Backend tests pass.
 - Deployed smoke test passes or exceptions are documented in `PROJECT_STATUS.md`.
-
