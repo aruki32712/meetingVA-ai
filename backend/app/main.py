@@ -783,19 +783,36 @@ async def _transcribe_audio_with_openai(
     }
     files = {"file": (filename, audio_bytes, content_type)}
 
-    async with httpx.AsyncClient(timeout=120) as client:
-        response = await client.post(
-            "https://api.openai.com/v1/audio/transcriptions",
-            headers={"Authorization": f"Bearer {openai_api_key}"},
-            data=form_data,
-            files=files,
+    try:
+        async with httpx.AsyncClient(timeout=120) as client:
+            response = await client.post(
+                "https://api.openai.com/v1/audio/transcriptions",
+                headers={"Authorization": f"Bearer {openai_api_key}"},
+                data=form_data,
+                files=files,
+            )
+            response.raise_for_status()
+    except Exception as exc:
+        error_response = getattr(exc, "response", None)
+        status_code = getattr(exc, "status_code", None) or getattr(
+            error_response, "status_code", None
         )
+        response_body = getattr(exc, "body", None)
+        if response_body is None and error_response is not None:
+            response_body = getattr(error_response, "text", None)
 
-    if response.status_code >= 400:
-        raise HTTPException(
-            status_code=502,
-            detail="OpenAI transcription request failed.",
+        logger.exception(
+            "OpenAI transcription request failed",
+            extra={
+                "openai_status_code": status_code,
+                "openai_response_body": _sanitize_processing_error_message(
+                    str(response_body)
+                )
+                if response_body is not None
+                else None,
+            },
         )
+        raise RuntimeError(f"OpenAI transcription failed: {exc}") from exc
 
     return response.json()
 
