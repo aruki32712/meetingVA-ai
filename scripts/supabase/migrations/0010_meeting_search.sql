@@ -78,7 +78,7 @@ as $$
     select m.*
     from public.meetings m
     where auth.uid() is not null
-      and (m.owner_id = auth.uid() or m.user_id = auth.uid())
+      and m.owner_id = auth.uid()
       and (date_from is null or m.meeting_date >= date_from)
       and (date_to is null or m.meeting_date <= date_to)
       and (status_filter is null or status_filter = '' or m.processing_status::text = status_filter)

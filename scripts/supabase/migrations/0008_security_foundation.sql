@@ -52,10 +52,9 @@ using (
   or exists (
     select 1 from public.meetings
     where meetings.id = audit_logs.meeting_id
-      and (meetings.owner_id = auth.uid() or meetings.user_id = auth.uid())
+      and meetings.owner_id = auth.uid()
   )
 );
 
 comment on table public.audit_logs is
   'Backend-owned audit log for security-relevant events. Authenticated users can read their own rows; application inserts should use the service role.';
-

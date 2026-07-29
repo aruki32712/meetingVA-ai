@@ -55,7 +55,6 @@ for insert
 to authenticated
 with check (
   owner_id = auth.uid()
-  and user_id = auth.uid()
 );
 
 drop policy if exists "Users insert attachments for own meetings"
@@ -72,6 +71,5 @@ with check (
     from public.meetings
     where meetings.id = attachments.meeting_id
       and meetings.owner_id = auth.uid()
-      and meetings.user_id = auth.uid()
   )
 );

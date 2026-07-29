@@ -349,10 +349,10 @@ def _require_owned_meeting(service_client: Any, meeting_id: str, user_id: str) -
     meeting_response = (
         service_client.table("meetings")
         .select(
-            "id,user_id,owner_id,title,audio_storage_path,duration_seconds,processing_status"
+            "id,owner_id,title,audio_storage_path,duration_seconds,processing_status"
         )
         .eq("id", meeting_id)
-        .or_(f"user_id.eq.{user_id},owner_id.eq.{user_id}")
+        .eq("owner_id", user_id)
         .limit(1)
         .execute()
     )

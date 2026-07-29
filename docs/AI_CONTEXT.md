@@ -68,7 +68,7 @@ Walter Labs AI is the operating company context for this repository. The operati
 - `meetings.processing_status` drives user-visible workflow state.
 - `processing_jobs` stores durable background job lifecycle state for transcription and analysis.
 - `processing_events` powers the visual processing timeline.
-- `meetings.owner_id` and `meetings.user_id` are both used for ownership compatibility.
+- `meetings.owner_id` is the canonical meeting ownership field.
 - `audio_storage_path` points to the private source recording in `meeting-audio`.
 - `participants.display_name` is the editable human-facing speaker name.
 - `participants.speaker_label` preserves provider or generated labels.

@@ -35,7 +35,7 @@ User-owned database access is enforced in two layers:
 - Supabase Row Level Security policies on application tables.
 - Backend ownership checks before protected mutations and AI job enqueueing.
 
-The backend accepts a meeting only when the authenticated user matches `meetings.owner_id` or `meetings.user_id`.
+The backend accepts a meeting only when the authenticated user matches `meetings.owner_id`.
 
 ## Supabase RLS
 
