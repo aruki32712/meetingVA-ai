@@ -427,6 +427,18 @@ def _update_processing_job(
     service_client.table("processing_jobs").update(values).eq("id", job_id).execute()
 
 
+def _sanitize_processing_error_message(error: BaseException | str) -> str:
+    message = str(error).strip() or type(error).__name__
+    message = re.sub(r"https?://\S+", "[redacted-url]", message)
+    message = re.sub(r"(?i)\bbearer\s+\S+", "Bearer [redacted]", message)
+    message = re.sub(
+        r"(?i)\b(api[_-]?key|authorization|token|secret)\b\s*[:=]\s*\S+",
+        r"\1=[redacted]",
+        message,
+    )
+    return message[:1000]
+
+
 def _mark_processing_job_started(
     service_client: Any,
     *,
@@ -469,7 +481,7 @@ def _mark_processing_job_failed(
     job_id: str,
     error_message: str,
 ) -> None:
-    safe_error = error_message[:1000] if error_message else "Job failed."
+    safe_error = _sanitize_processing_error_message(error_message or "Job failed.")
     _update_processing_job(
         service_client,
         job_id=job_id,
@@ -1003,13 +1015,17 @@ async def _run_transcribe_meeting_job(
             .eq("id", meeting_id)
             .execute()
         )
-    except HTTPException:
-        raise
     except Exception as exc:
-        raise HTTPException(
-            status_code=500,
-            detail="Unable to transcribe meeting audio.",
-        ) from exc
+        safe_error = _sanitize_processing_error_message(exc)
+        try:
+            exc.args = (safe_error,)
+        except (AttributeError, TypeError):
+            pass
+        logger.exception(
+            "transcription processing failed",
+            extra={"job_id": job_id, "meeting_id": meeting_id},
+        )
+        raise RuntimeError("Unable to transcribe meeting audio") from exc
 
     return {
         "meeting_id": meeting_id,

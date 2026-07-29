@@ -8,11 +8,16 @@ from app.main import (
     _mark_processing_job_started,
     _processing_job_is_cancelled,
     _run_transcribe_meeting_job,
+    _sanitize_processing_error_message,
 )
 from app.supabase_client import get_supabase_service_client
 from app.workers.celery_app import celery_app
 
 logger = logging.getLogger(__name__)
+
+
+def _root_failure(error: BaseException) -> BaseException:
+    return error.__cause__ or error
 
 
 @celery_app.task(name="meetingva.transcribe_meeting", bind=True)
@@ -53,13 +58,16 @@ def transcribe_meeting_task(
             )
         )
     except Exception as exc:
-        logger.exception("transcription job failed", extra={"job_id": job_id})
+        safe_error = _sanitize_processing_error_message(_root_failure(exc))
+        logger.error("transcription job failed", extra={"job_id": job_id})
         _mark_processing_job_failed(
             service_client,
             job_id=job_id,
-            error_message=str(exc),
+            error_message=safe_error,
         )
-        raise
+        if isinstance(exc, RuntimeError):
+            raise
+        raise RuntimeError("Unable to transcribe meeting audio") from exc
 
     if result.get("processing_status") == "cancelled":
         logger.info("transcription job cancelled", extra={"job_id": job_id})
