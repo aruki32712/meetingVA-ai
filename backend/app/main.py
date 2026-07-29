@@ -1,3 +1,4 @@
+import asyncio
 import json
 import logging
 import re
@@ -768,6 +769,55 @@ def _transcript_kind(
     return "original"
 
 
+def _openai_error_details(
+    exc: Exception,
+) -> tuple[int | None, str | None, str | None, str, str | None]:
+    response = getattr(exc, "response", None)
+    status_code = getattr(exc, "status_code", None) or getattr(
+        response, "status_code", None
+    )
+    response_body = getattr(exc, "body", None)
+    if response_body is None and response is not None:
+        response_body = getattr(response, "text", None)
+
+    error_type = None
+    error_code = None
+    error_message = str(exc)
+    if response is not None:
+        try:
+            payload = response.json()
+        except (TypeError, ValueError):
+            payload = None
+        if isinstance(payload, dict) and isinstance(payload.get("error"), dict):
+            error = payload["error"]
+            error_type = str(error["type"]) if error.get("type") is not None else None
+            error_code = str(error["code"]) if error.get("code") is not None else None
+            if error.get("message"):
+                error_message = str(error["message"])
+
+    return (
+        status_code,
+        error_type,
+        error_code,
+        _sanitize_processing_error_message(error_message),
+        _sanitize_processing_error_message(str(response_body))
+        if response_body is not None
+        else None,
+    )
+
+
+def _is_temporary_openai_rate_limit(
+    *,
+    status_code: int | None,
+    error_type: str | None,
+    error_code: str | None,
+) -> bool:
+    return status_code == 429 and "rate_limit_exceeded" in {
+        error_type,
+        error_code,
+    }
+
+
 async def _transcribe_audio_with_openai(
     *,
     audio_bytes: bytes,
@@ -783,36 +833,61 @@ async def _transcribe_audio_with_openai(
     }
     files = {"file": (filename, audio_bytes, content_type)}
 
-    try:
-        async with httpx.AsyncClient(timeout=120) as client:
-            response = await client.post(
-                "https://api.openai.com/v1/audio/transcriptions",
-                headers={"Authorization": f"Bearer {openai_api_key}"},
-                data=form_data,
-                files=files,
-            )
-            response.raise_for_status()
-    except Exception as exc:
-        error_response = getattr(exc, "response", None)
-        status_code = getattr(exc, "status_code", None) or getattr(
-            error_response, "status_code", None
-        )
-        response_body = getattr(exc, "body", None)
-        if response_body is None and error_response is not None:
-            response_body = getattr(error_response, "text", None)
-
-        logger.exception(
-            "OpenAI transcription request failed",
-            extra={
-                "openai_status_code": status_code,
-                "openai_response_body": _sanitize_processing_error_message(
-                    str(response_body)
+    async with httpx.AsyncClient(timeout=120) as client:
+        for attempt in range(3):
+            try:
+                response = await client.post(
+                    "https://api.openai.com/v1/audio/transcriptions",
+                    headers={"Authorization": f"Bearer {openai_api_key}"},
+                    data=form_data,
+                    files=files,
                 )
-                if response_body is not None
-                else None,
-            },
-        )
-        raise RuntimeError(f"OpenAI transcription failed: {exc}") from exc
+                response.raise_for_status()
+                break
+            except Exception as exc:
+                (
+                    status_code,
+                    error_type,
+                    error_code,
+                    error_message,
+                    response_body,
+                ) = _openai_error_details(exc)
+                retryable = _is_temporary_openai_rate_limit(
+                    status_code=status_code,
+                    error_type=error_type,
+                    error_code=error_code,
+                )
+
+                logger.exception(
+                    "OpenAI transcription request failed",
+                    extra={
+                        "openai_status_code": status_code,
+                        "openai_error_type": error_type,
+                        "openai_error_code": error_code,
+                        "openai_error_message": error_message,
+                        "openai_response_body": response_body,
+                        "openai_request_attempt": attempt + 1,
+                        "openai_will_retry": retryable and attempt < 2,
+                    },
+                )
+
+                if retryable and attempt < 2:
+                    await asyncio.sleep(2**attempt)
+                    continue
+
+                identifiers = ", ".join(
+                    value
+                    for value in (
+                        f"HTTP {status_code}" if status_code is not None else None,
+                        f"type={error_type}" if error_type else None,
+                        f"code={error_code}" if error_code else None,
+                    )
+                    if value
+                )
+                detail = f" ({identifiers})" if identifiers else ""
+                raise RuntimeError(
+                    f"OpenAI transcription failed{detail}: {error_message}"
+                ) from exc
 
     return response.json()
 
