@@ -776,11 +776,11 @@ async def _transcribe_audio_with_openai(
 ) -> dict[str, Any]:
     openai_api_key = _require_configured(settings.openai_api_key, "OPENAI_API_KEY")
 
-    form_data = [
-        ("model", settings.openai_transcription_model),
-        ("response_format", "verbose_json"),
-        ("timestamp_granularities[]", "segment"),
-    ]
+    form_data = {
+        "model": settings.openai_transcription_model,
+        "response_format": "verbose_json",
+        "timestamp_granularities[]": "segment",
+    }
     files = {"file": (filename, audio_bytes, content_type)}
 
     async with httpx.AsyncClient(timeout=120) as client:
@@ -808,11 +808,11 @@ async def _translate_audio_with_openai(
 ) -> dict[str, Any]:
     openai_api_key = _require_configured(settings.openai_api_key, "OPENAI_API_KEY")
 
-    form_data = [
-        ("model", settings.openai_transcription_model),
-        ("response_format", "verbose_json"),
-        ("timestamp_granularities[]", "segment"),
-    ]
+    form_data = {
+        "model": settings.openai_transcription_model,
+        "response_format": "verbose_json",
+        "timestamp_granularities[]": "segment",
+    }
     files = {"file": (filename, audio_bytes, content_type)}
 
     async with httpx.AsyncClient(timeout=120) as client:
