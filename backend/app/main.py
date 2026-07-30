@@ -1517,27 +1517,29 @@ async def get_meeting_job_status(
     try:
         job = AsyncResult(job_id, app=celery_app)
         job_state = job.state
-        ready = job.ready()
-        successful = job.successful() if ready else False
-        failed = job.failed()
+        celery_ready = job.ready()
     except Exception:
         logger.exception("Unable to read Celery result state for job %s", job_id)
         job_state = "UNKNOWN"
-        ready = processing_job.get("status") in TERMINAL_PROCESSING_STATUSES
-        successful = processing_job.get("status") in {"transcribed", "analyzed"}
-        failed = processing_job.get("status") == "failed"
+        celery_ready = False
+
+    processing_status = processing_job.get("status")
+    ready = processing_status in TERMINAL_PROCESSING_STATUSES
+    successful = processing_status in {"transcribed", "analyzed"}
+    failed = processing_status == "failed"
 
     return {
         "meeting_id": meeting_id,
         "job_id": job_id,
         "job_type": processing_job.get("job_type"),
         "job_state": job_state,
-        "job_status": processing_job.get("status"),
+        "job_status": processing_status,
         "ready": ready,
         "successful": successful,
-        "failed": failed or processing_job.get("status") == "failed",
+        "failed": failed,
         "error_message": processing_job.get("error_message"),
-        "processing_status": processing_job.get("status"),
+        "processing_status": processing_status,
+        "celery_ready": celery_ready,
     }
 
 

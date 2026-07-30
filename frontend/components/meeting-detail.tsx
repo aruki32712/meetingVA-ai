@@ -4,6 +4,10 @@ import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
 import { createBrowserSupabaseClient } from "@/lib/supabase";
 import { formatDate, formatDuration } from "./meeting-utils";
+import {
+  getSafeTranscriptionError,
+  getTranscriptionUiState
+} from "./transcription-job-state";
 
 type MeetingDetailRow = {
   id: string;
@@ -116,22 +120,6 @@ type TranscriptionJob = {
 const apiBaseUrl =
   process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000";
 const jobPollIntervalMs = 5000;
-const unknownTranscriptionError =
-  "We couldn’t generate the transcript. Please try again.";
-const safeTranscriptionErrors = new Set([
-  "Transcription is temporarily unavailable because the AI service quota has been reached. Please try again later or contact the administrator.",
-  "The transcription service is busy. Please try again in a few minutes.",
-  "This audio file could not be processed. Please upload a supported audio format and try again.",
-  "No audio file was found for this meeting.",
-  "Transcription is currently unavailable due to a service configuration issue.",
-  unknownTranscriptionError
-]);
-
-function getSafeTranscriptionError(message: string | null | undefined) {
-  return message && safeTranscriptionErrors.has(message)
-    ? message
-    : unknownTranscriptionError;
-}
 
 function formatTranscriptTime(milliseconds: number) {
   const totalSeconds = Math.floor(milliseconds / 1000);
@@ -201,7 +189,7 @@ function toMeetingStatus(processingStatus: string) {
 }
 
 function isActiveProcessingStatus(status: string) {
-  return ["queued", "transcribing", "analyzing"].includes(status);
+  return ["queued", "transcribing", "analyzing", "processing"].includes(status);
 }
 
 function isTerminalProcessingStatus(status: string) {
@@ -1113,12 +1101,6 @@ export function MeetingDetail({ meetingId }: { meetingId: string }) {
     meeting.status === "processing" && activeJobType === "analysis";
   const canAnalyze =
     transcriptSegments.length > 0 && !isProcessingActive;
-  const transcriptButtonLabel =
-    Boolean(transcriptionError)
-      ? "Retry transcription"
-      : isMeetingTranscribing
-        ? "Processing…"
-        : "Generate transcript";
   const analysisButtonLabel =
     Boolean(analysisError)
       ? "Retry Analysis"
@@ -1157,6 +1139,26 @@ export function MeetingDetail({ meetingId }: { meetingId: string }) {
     };
   });
   const processingTimeline = buildProcessingTimeline(meeting, processingEvents);
+  const latestTranscriptionEvent = [...processingEvents]
+    .reverse()
+    .find(
+      (event) =>
+        event.job_type === "transcription" &&
+        ["queued", "transcription_started", "transcription_completed", "transcription_failed"].includes(
+          event.event_type
+        )
+    );
+  const transcriptionUi = getTranscriptionUiState(
+    isMeetingTranscribing
+      ? "transcribing"
+      : transcriptionError
+        ? "failed"
+        : latestTranscriptionEvent?.event_type === "transcription_completed"
+          ? "transcribed"
+          : null,
+    transcriptionError,
+    transcriptSegments.length > 0
+  );
 
   function getSegmentSpeakerName(segment: TranscriptSegment) {
     if (segment.participant_id) {
@@ -1272,14 +1274,14 @@ export function MeetingDetail({ meetingId }: { meetingId: string }) {
                   Translate non-English audio to English
                 </label>
               </div>
-              {transcriptSegments.length === 0 ? (
+              {transcriptionUi.showAction ? (
                 <button
                   className="rounded-md bg-signal px-4 py-2 text-sm font-medium text-white transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:bg-slate-300"
                   type="button"
                   onClick={generateTranscript}
                   disabled={isProcessingActive}
                 >
-                  {transcriptButtonLabel}
+                  {transcriptionUi.actionLabel}
                 </button>
               ) : null}
             </div>
@@ -1576,15 +1578,15 @@ export function MeetingDetail({ meetingId }: { meetingId: string }) {
           </div>
         </div>
 
-        {isMeetingTranscribing ? (
+        {transcriptionUi.showSpinner ? (
           <div className="mt-5 h-2 overflow-hidden rounded-full bg-slate-200">
             <div className="h-full w-2/3 animate-pulse rounded-full bg-signal" />
           </div>
         ) : null}
 
-        {transcriptionError ? (
+        {transcriptionUi.errorMessage ? (
           <div className="mt-5 rounded-lg border border-red-200 bg-red-50 p-4 text-sm text-red-700">
-            {transcriptionError}
+            {transcriptionUi.errorMessage}
           </div>
         ) : null}
 
