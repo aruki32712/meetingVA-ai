@@ -462,8 +462,22 @@ def _update_processing_job(
     *,
     job_id: str,
     values: dict[str, Any],
-) -> None:
-    service_client.table("processing_jobs").update(values).eq("id", job_id).execute()
+) -> dict[str, Any]:
+    response = (
+        service_client.table("processing_jobs")
+        .update(values)
+        .eq("id", job_id)
+        .select(
+            "id,meeting_id,job_type,status,started_at,completed_at,error_message,retry_count,worker_version"
+        )
+        .execute()
+    )
+    if not response.data:
+        message = f"Processing job update matched no row: {job_id}"
+        logger.error(message, extra={"processing_job_id": job_id})
+        raise RuntimeError(message)
+
+    return response.data[0]
 
 
 def _sanitize_processing_error_message(error: BaseException | str) -> str:
@@ -537,8 +551,8 @@ def _mark_processing_job_started(
     job_id: str,
     status: str,
     retry_count: int = 0,
-) -> None:
-    _update_processing_job(
+) -> dict[str, Any]:
+    return _update_processing_job(
         service_client,
         job_id=job_id,
         values={
@@ -555,8 +569,8 @@ def _mark_processing_job_completed(
     *,
     job_id: str,
     status: str,
-) -> None:
-    _update_processing_job(
+) -> dict[str, Any]:
+    return _update_processing_job(
         service_client,
         job_id=job_id,
         values={
@@ -572,9 +586,9 @@ def _mark_processing_job_failed(
     *,
     job_id: str,
     error_message: str,
-) -> None:
+) -> dict[str, Any]:
     safe_error = _sanitize_processing_error_message(error_message or "Job failed.")
-    _update_processing_job(
+    return _update_processing_job(
         service_client,
         job_id=job_id,
         values={

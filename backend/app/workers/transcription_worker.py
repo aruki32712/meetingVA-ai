@@ -28,20 +28,31 @@ def transcribe_meeting_task(
     translate_to_english: bool = False,
     processing_job_id: str | None = None,
 ) -> dict[str, Any]:
-    job_id = processing_job_id or self.request.id
+    celery_task_id = self.request.id
+    log_context = {
+        "processing_job_id": processing_job_id,
+        "celery_task_id": celery_task_id,
+        "meeting_id": meeting_id,
+    }
+
+    if not processing_job_id:
+        logger.error("processing_job_id is required", extra=log_context)
+        raise RuntimeError("processing_job_id is required")
+
+    job_id = processing_job_id
     service_client = get_supabase_service_client()
 
     if _processing_job_is_cancelled(service_client, job_id):
-        logger.info("transcription job cancelled before start", extra={"job_id": job_id})
+        logger.info("transcription job cancelled before start", extra=log_context)
         return {"meeting_id": meeting_id, "job_id": job_id, "processing_status": "cancelled"}
 
     if getattr(self.request, "retries", 0):
         logger.warning(
             "retrying transcription job",
-            extra={"job_id": job_id, "retry_count": self.request.retries},
+            extra={**log_context, "retry_count": self.request.retries},
         )
 
-    logger.info("transcription job started", extra={"job_id": job_id})
+    logger.info("transcription job started", extra=log_context)
     _mark_processing_job_started(
         service_client,
         job_id=job_id,
@@ -59,7 +70,7 @@ def transcribe_meeting_task(
         )
     except Exception as exc:
         safe_error = _user_safe_transcription_error(_root_failure(exc))
-        logger.exception("transcription job failed", extra={"job_id": job_id})
+        logger.exception("transcription job failed", extra=log_context)
         _mark_processing_job_failed(
             service_client,
             job_id=job_id,
@@ -70,10 +81,10 @@ def transcribe_meeting_task(
         raise RuntimeError("Unable to transcribe meeting audio") from exc
 
     if result.get("processing_status") == "cancelled":
-        logger.info("transcription job cancelled", extra={"job_id": job_id})
+        logger.info("transcription job cancelled", extra=log_context)
         return result
 
-    logger.info("transcription job completed", extra={"job_id": job_id})
+    logger.info("transcription job completed", extra=log_context)
     _mark_processing_job_completed(
         service_client,
         job_id=job_id,

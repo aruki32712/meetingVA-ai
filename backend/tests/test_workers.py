@@ -22,6 +22,9 @@ class FakeTable:
         self.filters.append((column, value))
         return self
 
+    def select(self, columns: str) -> "FakeTable":
+        return self
+
     def execute(self) -> object:
         self.client.updates.append(
             {
@@ -30,12 +33,16 @@ class FakeTable:
                 "filters": self.filters,
             }
         )
-        return type("Response", (), {"data": []})()
+        data = []
+        if self.client.match_updates and self.pending_update is not None:
+            data = [{"id": "job-id", **self.pending_update}]
+        return type("Response", (), {"data": data})()
 
 
 class FakeSupabaseClient:
-    def __init__(self) -> None:
+    def __init__(self, *, match_updates: bool = True) -> None:
         self.updates: list[dict[str, object]] = []
+        self.match_updates = match_updates
 
     def table(self, table_name: str) -> FakeTable:
         return FakeTable(table_name, self)
@@ -92,3 +99,18 @@ def test_processing_job_terminal_helpers_update_job_status() -> None:
     assert len(failed_client.updates) == 1
     assert cancelled_client.updates[0]["values"]["status"] == "cancelled"
     assert len(cancelled_client.updates) == 1
+
+
+def test_processing_job_update_raises_when_no_row_matches() -> None:
+    client = FakeSupabaseClient(match_updates=False)
+
+    try:
+        _mark_processing_job_started(
+            client,
+            job_id="missing-job-id",
+            status="transcribing",
+        )
+    except RuntimeError as exc:
+        assert str(exc) == "Processing job update matched no row: missing-job-id"
+    else:
+        raise AssertionError("Expected a zero-row processing job update to fail")
