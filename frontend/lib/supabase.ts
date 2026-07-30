@@ -19,6 +19,14 @@ type MeetingStatus =
 type AttachmentKind = "audio" | "transcript" | "document" | "image" | "other";
 type TranscriptKind = "original" | "translated" | "both";
 type ProcessingJobType = "transcription" | "analysis";
+type ProcessingJobStatus =
+  | "queued"
+  | "transcribing"
+  | "transcribed"
+  | "analyzing"
+  | "analyzed"
+  | "failed"
+  | "cancelled";
 type ProcessingEventStatus = "pending" | "current" | "completed" | "failed";
 
 type Database = {
@@ -162,6 +170,56 @@ type Database = {
         Relationships: [
           {
             foreignKeyName: "processing_events_meeting_id_fkey";
+            columns: ["meeting_id"];
+            isOneToOne: false;
+            referencedRelation: "meetings";
+            referencedColumns: ["id"];
+          }
+        ];
+      };
+      processing_jobs: {
+        Row: {
+          id: string;
+          meeting_id: string;
+          job_type: ProcessingJobType;
+          status: ProcessingJobStatus;
+          error_message: string | null;
+          started_at: string | null;
+          completed_at: string | null;
+          retry_count: number;
+          worker_version: string | null;
+          created_at: string;
+          updated_at: string;
+        };
+        Insert: {
+          id?: string;
+          meeting_id: string;
+          job_type: ProcessingJobType;
+          status?: ProcessingJobStatus;
+          error_message?: string | null;
+          started_at?: string | null;
+          completed_at?: string | null;
+          retry_count?: number;
+          worker_version?: string | null;
+          created_at?: string;
+          updated_at?: string;
+        };
+        Update: {
+          id?: string;
+          meeting_id?: string;
+          job_type?: ProcessingJobType;
+          status?: ProcessingJobStatus;
+          error_message?: string | null;
+          started_at?: string | null;
+          completed_at?: string | null;
+          retry_count?: number;
+          worker_version?: string | null;
+          created_at?: string;
+          updated_at?: string;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "processing_jobs_meeting_id_fkey";
             columns: ["meeting_id"];
             isOneToOne: false;
             referencedRelation: "meetings";

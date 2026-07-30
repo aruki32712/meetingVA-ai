@@ -107,9 +107,31 @@ type JobStatusResponse = {
   processing_status: string;
 };
 
+type TranscriptionJob = {
+  id: string;
+  status: string;
+  error_message: string | null;
+};
+
 const apiBaseUrl =
   process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000";
 const jobPollIntervalMs = 5000;
+const unknownTranscriptionError =
+  "We couldn’t generate the transcript. Please try again.";
+const safeTranscriptionErrors = new Set([
+  "Transcription is temporarily unavailable because the AI service quota has been reached. Please try again later or contact the administrator.",
+  "The transcription service is busy. Please try again in a few minutes.",
+  "This audio file could not be processed. Please upload a supported audio format and try again.",
+  "No audio file was found for this meeting.",
+  "Transcription is currently unavailable due to a service configuration issue.",
+  unknownTranscriptionError
+]);
+
+function getSafeTranscriptionError(message: string | null | undefined) {
+  return message && safeTranscriptionErrors.has(message)
+    ? message
+    : unknownTranscriptionError;
+}
 
 function formatTranscriptTime(milliseconds: number) {
   const totalSeconds = Math.floor(milliseconds / 1000);
@@ -171,15 +193,11 @@ function getErrorMessage(error: unknown, fallback: string) {
 }
 
 function toMeetingStatus(processingStatus: string) {
-  if (
-    processingStatus === "completed" ||
-    processingStatus === "transcribed" ||
-    processingStatus === "analyzed"
-  ) {
-    return "completed";
+  if (isActiveProcessingStatus(processingStatus)) {
+    return "processing";
   }
 
-  return "processing";
+  return "completed";
 }
 
 function isActiveProcessingStatus(status: string) {
@@ -377,7 +395,10 @@ function buildProcessingTimeline(
         transcriptionResult?.message ?? "The transcript will be ready for review.",
       status: eventStatus(transcriptionResult),
       timestamp: transcriptionResult?.created_at ?? null,
-      errorMessage: transcriptionResult?.error_message ?? null,
+      errorMessage:
+        transcriptionResult?.event_type === "transcription_failed"
+          ? getSafeTranscriptionError(transcriptionResult.error_message)
+          : null,
       retryType:
         transcriptionResult?.event_type === "transcription_failed"
           ? "transcription"
@@ -525,6 +546,19 @@ export function MeetingDetail({ meetingId }: { meetingId: string }) {
       throw eventError;
     }
 
+    const { data: transcriptionJobs, error: transcriptionJobError } =
+      await supabase
+        .from("processing_jobs")
+        .select("id,status,error_message")
+        .eq("meeting_id", meetingId)
+        .eq("job_type", "transcription")
+        .order("created_at", { ascending: false })
+        .limit(1);
+
+    if (transcriptionJobError) {
+      throw transcriptionJobError;
+    }
+
     let signedAudioUrl = "";
 
     if (data.audio_storage_path) {
@@ -558,7 +592,8 @@ export function MeetingDetail({ meetingId }: { meetingId: string }) {
       actionItems: actionItemRows ?? [],
       decisions: decisionRows ?? [],
       questions: questionRows ?? [],
-      processingEvents: eventRows ?? []
+      processingEvents: eventRows ?? [],
+      transcriptionJob: (transcriptionJobs?.[0] ?? null) as TranscriptionJob | null
     };
   }, [meetingId]);
 
@@ -582,8 +617,15 @@ export function MeetingDetail({ meetingId }: { meetingId: string }) {
 
   const refreshMeetingData = useCallback(async () => {
     const result = await loadMeeting();
+    const transcriptionJob = result.transcriptionJob;
+    const transcriptionIsActive = Boolean(
+      transcriptionJob && isActiveProcessingStatus(transcriptionJob.status)
+    );
 
-    setMeeting(result.meeting);
+    setMeeting({
+      ...result.meeting,
+      status: transcriptionIsActive ? "processing" : result.meeting.status
+    });
     setAudioUrl(result.audioUrl);
     setTranscriptSegments(result.transcriptSegments);
     setParticipants(result.participants);
@@ -600,6 +642,21 @@ export function MeetingDetail({ meetingId }: { meetingId: string }) {
     setDecisions(result.decisions);
     setQuestions(result.questions);
     setProcessingEvents(result.processingEvents);
+    if (transcriptionIsActive && transcriptionJob) {
+      setActiveJobId(transcriptionJob.id);
+      setActiveJobType("transcription");
+      setTranscriptionError("");
+    } else {
+      setActiveJobId("");
+      setActiveJobType("");
+      if (transcriptionJob?.status === "failed") {
+        setTranscriptionError(
+          getSafeTranscriptionError(transcriptionJob.error_message)
+        );
+      } else if (transcriptionJob?.status === "transcribed") {
+        setTranscriptionError("");
+      }
+    }
   }, [loadMeeting]);
 
   useEffect(() => {
@@ -613,7 +670,14 @@ export function MeetingDetail({ meetingId }: { meetingId: string }) {
         const result = await loadMeeting();
 
         if (isMounted) {
-          setMeeting(result.meeting);
+          const transcriptionJob = result.transcriptionJob;
+          const transcriptionIsActive = Boolean(
+            transcriptionJob && isActiveProcessingStatus(transcriptionJob.status)
+          );
+          setMeeting({
+            ...result.meeting,
+            status: transcriptionIsActive ? "processing" : result.meeting.status
+          });
           setAudioUrl(result.audioUrl);
           setTranscriptSegments(result.transcriptSegments);
           setParticipants(result.participants);
@@ -630,6 +694,25 @@ export function MeetingDetail({ meetingId }: { meetingId: string }) {
           setDecisions(result.decisions);
           setQuestions(result.questions);
           setProcessingEvents(result.processingEvents);
+          if (transcriptionIsActive && transcriptionJob) {
+            setActiveJobId(transcriptionJob.id);
+            setActiveJobType("transcription");
+            setTranscriptionError("");
+          } else if (transcriptionJob?.status === "failed") {
+            setTranscriptionError(
+              getSafeTranscriptionError(transcriptionJob.error_message)
+            );
+          } else {
+            const savedError = window.sessionStorage.getItem(
+              `meeting-transcription-error:${meetingId}`
+            );
+            if (savedError) {
+              setTranscriptionError(savedError);
+              window.sessionStorage.removeItem(
+                `meeting-transcription-error:${meetingId}`
+              );
+            }
+          }
         }
       } catch (loadError) {
         if (process.env.NODE_ENV === "development") {
@@ -651,7 +734,7 @@ export function MeetingDetail({ meetingId }: { meetingId: string }) {
     return () => {
       isMounted = false;
     };
-  }, [loadMeeting]);
+  }, [loadMeeting, meetingId]);
 
   useEffect(() => {
     const processingStatus = meeting?.status;
@@ -803,7 +886,7 @@ export function MeetingDetail({ meetingId }: { meetingId: string }) {
       }
     } catch (transcribeError) {
       setMeeting((current) =>
-        current ? { ...current, status: "processing" } : current
+        current ? { ...current, status: "completed" } : current
       );
       setTranscriptionError(
         transcribeError instanceof Error
@@ -1032,10 +1115,10 @@ export function MeetingDetail({ meetingId }: { meetingId: string }) {
     transcriptSegments.length > 0 && !isProcessingActive;
   const transcriptButtonLabel =
     Boolean(transcriptionError)
-      ? "Retry Transcript"
+      ? "Retry transcription"
       : isMeetingTranscribing
-        ? "Processing..."
-        : "Generate Transcript";
+        ? "Processing…"
+        : "Generate transcript";
   const analysisButtonLabel =
     Boolean(analysisError)
       ? "Retry Analysis"
@@ -1189,21 +1272,18 @@ export function MeetingDetail({ meetingId }: { meetingId: string }) {
                   Translate non-English audio to English
                 </label>
               </div>
-              <button
-                className="rounded-md bg-signal px-4 py-2 text-sm font-medium text-white transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:bg-slate-300"
-                type="button"
-                onClick={generateTranscript}
-                disabled={isProcessingActive}
-              >
-                {transcriptButtonLabel}
-              </button>
+              {transcriptSegments.length === 0 ? (
+                <button
+                  className="rounded-md bg-signal px-4 py-2 text-sm font-medium text-white transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:bg-slate-300"
+                  type="button"
+                  onClick={generateTranscript}
+                  disabled={isProcessingActive}
+                >
+                  {transcriptButtonLabel}
+                </button>
+              ) : null}
             </div>
             <audio className="w-full" controls src={audioUrl} />
-            {transcriptionError ? (
-              <div className="rounded-lg border border-red-200 bg-red-50 p-4 text-sm text-red-700">
-                {transcriptionError}
-              </div>
-            ) : null}
           </div>
         ) : null}
       </section>
@@ -1499,6 +1579,12 @@ export function MeetingDetail({ meetingId }: { meetingId: string }) {
         {isMeetingTranscribing ? (
           <div className="mt-5 h-2 overflow-hidden rounded-full bg-slate-200">
             <div className="h-full w-2/3 animate-pulse rounded-full bg-signal" />
+          </div>
+        ) : null}
+
+        {transcriptionError ? (
+          <div className="mt-5 rounded-lg border border-red-200 bg-red-50 p-4 text-sm text-red-700">
+            {transcriptionError}
           </div>
         ) : null}
 

@@ -424,6 +424,52 @@ export function NewMeetingRecorder() {
         );
       }
 
+      setSaveStatus("Starting transcription...");
+      try {
+        const { data: sessionData, error: sessionError } =
+          await supabase.auth.getSession();
+        const accessToken = sessionData.session?.access_token;
+
+        if (sessionError || !accessToken) {
+          throw sessionError ?? new Error("Your session is no longer available.");
+        }
+
+        const apiBaseUrl =
+          process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000";
+        const response = await fetch(
+          `${apiBaseUrl}/v1/meetings/${createdMeeting.id}/transcribe`,
+          {
+            method: "POST",
+            headers: {
+              Authorization: `Bearer ${accessToken}`,
+              "Content-Type": "application/json"
+            },
+            body: JSON.stringify({ translate_to_english: false })
+          }
+        );
+
+        if (!response.ok) {
+          const payload = await response.json().catch(() => null);
+          throw new Error(
+            payload?.detail ??
+              "We couldn’t start transcription. You can retry from the meeting."
+          );
+        }
+      } catch (transcriptionStartError) {
+        const message =
+          transcriptionStartError instanceof Error
+            ? transcriptionStartError.message
+            : "We couldn’t start transcription. You can retry from the meeting.";
+        window.sessionStorage.setItem(
+          `meeting-transcription-error:${createdMeeting.id}`,
+          message
+        );
+
+        if (process.env.NODE_ENV === "development") {
+          console.error("Unable to start transcription", transcriptionStartError);
+        }
+      }
+
       setUploadProgress(100);
       setSaveStatus("Meeting saved.");
       router.push(`/dashboard/meetings/${createdMeeting.id}`);

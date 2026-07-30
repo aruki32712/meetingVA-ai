@@ -131,6 +131,27 @@ class JobResponse(BaseModel):
 
 ACTIVE_PROCESSING_STATUSES = {"queued", "transcribing", "analyzing"}
 TERMINAL_PROCESSING_STATUSES = {"transcribed", "analyzed", "failed", "cancelled"}
+TRANSCRIPTION_ACTIVE_STATUSES = {"queued", "transcribing"}
+TRANSCRIPTION_COMPLETED_STATUSES = {"transcribed"}
+
+TRANSCRIPTION_QUOTA_ERROR = (
+    "Transcription is temporarily unavailable because the AI service quota has "
+    "been reached. Please try again later or contact the administrator."
+)
+TRANSCRIPTION_RATE_LIMIT_ERROR = (
+    "The transcription service is busy. Please try again in a few minutes."
+)
+TRANSCRIPTION_AUDIO_ERROR = (
+    "This audio file could not be processed. Please upload a supported audio "
+    "format and try again."
+)
+TRANSCRIPTION_MISSING_AUDIO_ERROR = "No audio file was found for this meeting."
+TRANSCRIPTION_CONFIGURATION_ERROR = (
+    "Transcription is currently unavailable due to a service configuration issue."
+)
+TRANSCRIPTION_UNKNOWN_ERROR = (
+    "We couldn’t generate the transcript. Please try again."
+)
 
 
 def _utc_now_iso() -> str:
@@ -404,6 +425,23 @@ def _get_processing_job(
     return response.data[0] if response.data else None
 
 
+def _get_latest_transcription_job(
+    service_client: Any,
+    *,
+    meeting_id: str,
+) -> dict[str, Any] | None:
+    response = (
+        service_client.table("processing_jobs")
+        .select("id,meeting_id,job_type,status,error_message,created_at")
+        .eq("meeting_id", meeting_id)
+        .eq("job_type", "transcription")
+        .order("created_at", desc=True)
+        .limit(1)
+        .execute()
+    )
+    return response.data[0] if response.data else None
+
+
 def _processing_job_is_cancelled(service_client: Any, job_id: str | None) -> bool:
     if not job_id:
         return False
@@ -438,6 +476,59 @@ def _sanitize_processing_error_message(error: BaseException | str) -> str:
         message,
     )
     return message[:1000]
+
+
+def _user_safe_transcription_error(error: BaseException | str) -> str:
+    message = _sanitize_processing_error_message(error).lower()
+
+    if "rate_limit_exceeded" in message:
+        return TRANSCRIPTION_RATE_LIMIT_ERROR
+
+    if (
+        "http 429" in message
+        or "429 too many requests" in message
+        or "insufficient_quota" in message
+        or "billing_hard_limit_reached" in message
+    ):
+        return TRANSCRIPTION_QUOTA_ERROR
+
+    if (
+        "no audio file" in message
+        or "meeting has no audio" in message
+        or "audio_storage_path" in message and "missing" in message
+    ):
+        return TRANSCRIPTION_MISSING_AUDIO_ERROR
+
+    if any(
+        marker in message
+        for marker in (
+            "invalid_audio",
+            "unsupported audio",
+            "unsupported_audio",
+            "invalid file format",
+            "audio format",
+            "could not decode",
+        )
+    ):
+        return TRANSCRIPTION_AUDIO_ERROR
+
+    if any(
+        marker in message
+        for marker in (
+            "http 401",
+            "http 403",
+            "401 unauthorized",
+            "403 forbidden",
+            "openai_api_key",
+            "invalid api key",
+            "authentication",
+            "not configured",
+            "configuration",
+        )
+    ):
+        return TRANSCRIPTION_CONFIGURATION_ERROR
+
+    return TRANSCRIPTION_UNKNOWN_ERROR
 
 
 def _mark_processing_job_started(
@@ -523,6 +614,90 @@ def _ensure_not_processing(service_client: Any, meeting_id: str) -> None:
 
     if response.data:
         raise HTTPException(status_code=409, detail="Meeting is already processing.")
+
+
+def _enqueue_transcription_job_if_needed(
+    service_client: Any,
+    *,
+    meeting: dict[str, Any],
+    translate_to_english: bool,
+) -> dict[str, Any]:
+    meeting_id = str(meeting["id"])
+
+    if not meeting.get("audio_storage_path"):
+        raise HTTPException(
+            status_code=400,
+            detail=TRANSCRIPTION_MISSING_AUDIO_ERROR,
+        )
+
+    existing_job = _get_latest_transcription_job(
+        service_client,
+        meeting_id=meeting_id,
+    )
+    if existing_job and existing_job.get("status") in (
+        TRANSCRIPTION_ACTIVE_STATUSES | TRANSCRIPTION_COMPLETED_STATUSES
+    ):
+        return {
+            "meeting_id": meeting_id,
+            "job_id": existing_job["id"],
+            "processing_status": existing_job["status"],
+        }
+
+    _ensure_not_processing(service_client, meeting_id)
+    job_id = str(uuid4())
+    try:
+        _create_processing_job(
+            service_client,
+            job_id=job_id,
+            meeting_id=meeting_id,
+            job_type="transcription",
+        )
+    except Exception:
+        concurrent_job = _get_latest_transcription_job(
+            service_client,
+            meeting_id=meeting_id,
+        )
+        if concurrent_job and concurrent_job.get("status") in (
+            TRANSCRIPTION_ACTIVE_STATUSES | TRANSCRIPTION_COMPLETED_STATUSES
+        ):
+            return {
+                "meeting_id": meeting_id,
+                "job_id": concurrent_job["id"],
+                "processing_status": concurrent_job["status"],
+            }
+        raise
+
+    from app.workers.transcription_worker import transcribe_meeting_task
+
+    try:
+        transcribe_meeting_task.apply_async(
+            kwargs={
+                "meeting_id": meeting_id,
+                "translate_to_english": translate_to_english,
+                "processing_job_id": job_id,
+            },
+            task_id=job_id,
+        )
+    except Exception as exc:
+        logger.exception(
+            "Unable to enqueue transcription job",
+            extra={"job_id": job_id, "meeting_id": meeting_id},
+        )
+        _mark_processing_job_failed(
+            service_client,
+            job_id=job_id,
+            error_message=TRANSCRIPTION_UNKNOWN_ERROR,
+        )
+        raise HTTPException(
+            status_code=503,
+            detail=TRANSCRIPTION_UNKNOWN_ERROR,
+        ) from exc
+
+    return {
+        "meeting_id": meeting_id,
+        "job_id": job_id,
+        "processing_status": "queued",
+    }
 
 
 def _require_participant(
@@ -1233,45 +1408,11 @@ async def transcribe_meeting(
     user_id = _require_user_id(token)
     _enforce_ai_rate_limit(user_id, "transcribe")
     meeting = _require_owned_meeting(service_client, meeting_id, user_id)
-    _ensure_not_processing(service_client, meeting_id)
-
-    if not meeting.get("audio_storage_path"):
-        raise HTTPException(status_code=400, detail="Meeting has no audio file.")
-
-    job_id = str(uuid4())
-    _create_processing_job(
+    return _enqueue_transcription_job_if_needed(
         service_client,
-        job_id=job_id,
-        meeting_id=meeting_id,
-        job_type="transcription",
+        meeting=meeting,
+        translate_to_english=bool(payload and payload.translate_to_english),
     )
-    from app.workers.transcription_worker import transcribe_meeting_task
-
-    try:
-        transcribe_meeting_task.apply_async(
-            kwargs={
-                "meeting_id": meeting_id,
-                "translate_to_english": bool(payload and payload.translate_to_english),
-                "processing_job_id": job_id,
-            },
-            task_id=job_id,
-        )
-    except Exception as exc:
-        _mark_processing_job_failed(
-            service_client,
-            job_id=job_id,
-            error_message="Unable to enqueue transcription job.",
-        )
-        raise HTTPException(
-            status_code=503,
-            detail="Unable to enqueue transcription job.",
-        ) from exc
-
-    return {
-        "meeting_id": meeting_id,
-        "job_id": job_id,
-        "processing_status": "queued",
-    }
 
 
 @app.post(

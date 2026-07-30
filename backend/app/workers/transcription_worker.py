@@ -8,7 +8,7 @@ from app.main import (
     _mark_processing_job_started,
     _processing_job_is_cancelled,
     _run_transcribe_meeting_job,
-    _sanitize_processing_error_message,
+    _user_safe_transcription_error,
 )
 from app.supabase_client import get_supabase_service_client
 from app.workers.celery_app import celery_app
@@ -58,8 +58,8 @@ def transcribe_meeting_task(
             )
         )
     except Exception as exc:
-        safe_error = _sanitize_processing_error_message(_root_failure(exc))
-        logger.error("transcription job failed", extra={"job_id": job_id})
+        safe_error = _user_safe_transcription_error(_root_failure(exc))
+        logger.exception("transcription job failed", extra={"job_id": job_id})
         _mark_processing_job_failed(
             service_client,
             job_id=job_id,
