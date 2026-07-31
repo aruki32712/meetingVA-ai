@@ -1363,7 +1363,7 @@ async def _run_analyze_meeting_job(
     meeting = meeting_response.data[0] if meeting_response.data else None
 
     if not meeting:
-        raise HTTPException(status_code=404, detail="Meeting was not found.")
+        raise RuntimeError("Meeting was not found.")
 
     transcript_response = (
         service_client.table("transcript_segments")
@@ -1376,7 +1376,7 @@ async def _run_analyze_meeting_job(
     transcript = _format_transcript_for_analysis(transcript_segments)
 
     if not transcript:
-        raise HTTPException(status_code=400, detail="Meeting has no transcript.")
+        raise RuntimeError("Meeting has no transcript.")
 
     try:
         analysis = await _analyze_transcript_with_openai(
@@ -1407,13 +1407,24 @@ async def _run_analyze_meeting_job(
             .eq("id", meeting_id)
             .execute()
         )
-    except HTTPException:
-        raise
     except Exception as exc:
-        raise HTTPException(
-            status_code=500,
-            detail="Unable to analyze meeting transcript.",
-        ) from exc
+        safe_error = _sanitize_processing_error_message(exc)
+        try:
+            exc.args = (safe_error,)
+        except (AttributeError, TypeError):
+            pass
+        if hasattr(exc, "detail"):
+            exc.detail = safe_error
+        logger.exception(
+            "Meeting transcript analysis failed",
+            extra={
+                "processing_job_id": job_id,
+                "meeting_id": meeting_id,
+                "exception_type": type(exc).__name__,
+                "exception_message": str(exc),
+            },
+        )
+        raise RuntimeError("Unable to analyze meeting transcript") from exc
 
     return {
         "meeting_id": meeting_id,

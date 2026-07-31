@@ -25,17 +25,23 @@ class FakeTable:
     def select(self, columns: str) -> "FakeTable":
         return self
 
+    def limit(self, count: int) -> "FakeTable":
+        assert count == 1
+        return self
+
     def execute(self) -> object:
-        self.client.updates.append(
-            {
-                "table": self.table_name,
-                "values": self.pending_update,
-                "filters": self.filters,
-            }
-        )
         data = []
         if self.client.match_updates and self.pending_update is not None:
+            self.client.updates.append(
+                {
+                    "table": self.table_name,
+                    "values": self.pending_update,
+                    "filters": self.filters,
+                }
+            )
             data = [{"id": "job-id", **self.pending_update}]
+        elif self.client.match_updates:
+            data = [{"id": "job-id"}]
         return type("Response", (), {"data": data})()
 
 
