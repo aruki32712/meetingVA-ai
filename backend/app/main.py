@@ -156,6 +156,7 @@ TRANSCRIPTION_UNKNOWN_ERROR = (
 
 MAX_SAME_SPEAKER_PAUSE_MS = 1500
 MAX_MERGED_TRANSCRIPT_CHARACTERS = 1500
+UNKNOWN_SPEAKER_LABEL = "Unknown Speaker"
 
 
 def _utc_now_iso() -> str:
@@ -221,15 +222,17 @@ def _coerce_segment_timestamp(value: Any) -> int:
     return max(0, round(float(value) * 1000))
 
 
-def _extract_speaker_label(segment: dict[str, Any], fallback_index: int) -> str | None:
+def _extract_speaker_label(segment: dict[str, Any]) -> str | None:
     for key in ("speaker_label", "speaker", "speaker_id"):
-        value = _coerce_optional_text(segment.get(key))
+        raw_value = segment.get(key)
+
+        if raw_value is None or isinstance(raw_value, bool):
+            continue
+
+        value = str(raw_value).strip()
 
         if value:
             return value
-
-    if segment.get("speaker") is not None:
-        return f"Speaker {fallback_index + 1}"
 
     return None
 
@@ -303,8 +306,7 @@ def _merge_adjacent_speaker_segments(
                 for value in joined_values.values()
             )
             can_merge = (
-                current_label is not None
-                and current_label == candidate_label
+                current_label == candidate_label
                 and 0 <= pause_ms < maximum_pause_ms
                 and current.get("transcript_kind") == candidate.get("transcript_kind")
                 and within_character_limit
@@ -370,9 +372,9 @@ def _build_transcript_rows(
             rows.append(
                 {
                     "meeting_id": meeting_id,
-                    "speaker_label": _extract_speaker_label(segment, index)
+                    "speaker_label": _extract_speaker_label(segment)
                     or (
-                        _extract_speaker_label(original_segment, index)
+                        _extract_speaker_label(original_segment)
                         if original_segment
                         else None
                     ),
@@ -451,9 +453,15 @@ def _fallback_speaker_label(index: int) -> str:
     return f"Speaker {index + 1}"
 
 
-def _speaker_label_for_row(row: dict[str, Any], fallback_index: int) -> str:
-    return _coerce_optional_text(row.get("speaker_label")) or _fallback_speaker_label(
-        fallback_index
+def _speaker_label_for_row(row: dict[str, Any]) -> str:
+    return _coerce_optional_text(row.get("speaker_label")) or UNKNOWN_SPEAKER_LABEL
+
+
+def _speaker_label_source(row: dict[str, Any]) -> str:
+    return (
+        "provider_detected"
+        if _coerce_optional_text(row.get("speaker_label"))
+        else "fallback_unknown"
     )
 
 
@@ -866,7 +874,10 @@ def _create_participant(
                 "display_name": display_name,
                 "speaker_label": speaker_label,
                 "source": source,
-                "metadata": {"detection_method": "owner_correction"},
+                "metadata": {
+                    "detection_method": "owner_correction",
+                    "speaker_label_source": "user_assigned",
+                },
             }
         )
         .execute()
@@ -882,12 +893,14 @@ def _attach_participants_to_transcript_rows(
     rows: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
     labels: list[str] = []
+    label_sources: dict[str, str] = {}
 
-    for index, row in enumerate(rows):
-        label = _speaker_label_for_row(row, index)
+    for row in rows:
+        label = _speaker_label_for_row(row)
 
         if label not in labels:
             labels.append(label)
+            label_sources[label] = _speaker_label_source(row)
 
     if not labels:
         return rows
@@ -895,10 +908,21 @@ def _attach_participants_to_transcript_rows(
     participant_rows = [
         {
             "meeting_id": meeting_id,
-            "display_name": _fallback_speaker_label(index),
+            "display_name": (
+                UNKNOWN_SPEAKER_LABEL
+                if label_sources[label] == "fallback_unknown"
+                else _fallback_speaker_label(index)
+            ),
             "speaker_label": label,
             "source": "transcript",
-            "metadata": {"detection_method": "transcription_diarization"},
+            "metadata": {
+                "detection_method": (
+                    "transcription_diarization"
+                    if label_sources[label] == "provider_detected"
+                    else "no_diarization"
+                ),
+                "speaker_label_source": label_sources[label],
+            },
         }
         for index, label in enumerate(labels)
     ]
@@ -909,8 +933,8 @@ def _attach_participants_to_transcript_rows(
         if participant.get("speaker_label")
     }
 
-    for index, row in enumerate(rows):
-        label = _speaker_label_for_row(row, index)
+    for row in rows:
+        label = _speaker_label_for_row(row)
         row["speaker_label"] = label
         row["participant_id"] = participants_by_label[label]
 

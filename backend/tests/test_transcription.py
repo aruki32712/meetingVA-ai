@@ -101,26 +101,14 @@ def test_build_transcript_rows_maps_openai_segments_to_milliseconds() -> None:
             "meeting_id": "meeting-id",
             "speaker_label": None,
             "start_ms": 250,
-            "end_ms": 2500,
-            "text": "First segment.",
-            "original_text": "First segment.",
+            "end_ms": 4750,
+            "text": "First segment. Second segment.",
+            "original_text": "First segment. Second segment.",
             "translated_text": None,
             "transcript_kind": "original",
             "confidence": None,
             "segment_index": 0,
-        },
-        {
-            "meeting_id": "meeting-id",
-            "speaker_label": None,
-            "start_ms": 2500,
-            "end_ms": 4750,
-            "text": "Second segment.",
-            "original_text": "Second segment.",
-            "translated_text": None,
-            "transcript_kind": "original",
-            "confidence": None,
-            "segment_index": 1,
-        },
+        }
     ]
 
 
@@ -237,9 +225,10 @@ def test_build_transcript_rows_merges_original_and_translated_text() -> None:
     assert " ".join(row["text"] for row in rows) == "Hello. How are you? Good."
 
 
-def test_attach_participants_assigns_fallback_speaker() -> None:
+def test_unlabeled_rows_share_one_unknown_speaker_participant() -> None:
+    client = FakeSupabaseClient()
     rows = _attach_participants_to_transcript_rows(
-        FakeSupabaseClient(),
+        client,
         meeting_id="meeting-id",
         rows=[
             {
@@ -250,12 +239,58 @@ def test_attach_participants_assigns_fallback_speaker() -> None:
                 "text": "Hello.",
                 "confidence": None,
                 "segment_index": 0,
-            }
+            },
+            {
+                "meeting_id": "meeting-id",
+                "speaker_label": None,
+                "start_ms": 5000,
+                "end_ms": 6000,
+                "text": "Later words.",
+                "confidence": None,
+                "segment_index": 1,
+            },
         ],
     )
 
-    assert rows[0]["speaker_label"] == "Speaker 1"
-    assert rows[0]["participant_id"] == "participant-1"
+    assert {row["speaker_label"] for row in rows} == {"Unknown Speaker"}
+    assert {row["participant_id"] for row in rows} == {"participant-1"}
+    assert len(client.participants.rows) == 1
+    assert client.participants.rows[0]["display_name"] == "Unknown Speaker"
+    assert client.participants.rows[0]["metadata"]["speaker_label_source"] == (
+        "fallback_unknown"
+    )
+    assert all(
+        row["speaker_label"] not in {"Speaker 1", "Speaker 2"} for row in rows
+    )
+
+
+def test_provider_speaker_ids_create_participants_for_unique_labels_only() -> None:
+    client = FakeSupabaseClient()
+    built_rows = _build_transcript_rows(
+        meeting_id="meeting-id",
+        transcription={
+            "segments": [
+                {"start": 0, "end": 1, "text": "A one.", "speaker_id": "spk_a"},
+                {"start": 1.2, "end": 2, "text": "A two.", "speaker_id": "spk_a"},
+                {"start": 2.1, "end": 3, "text": "B one.", "speaker_id": "spk_b"},
+            ]
+        },
+        duration_seconds=3,
+    )
+    rows = _attach_participants_to_transcript_rows(
+        client,
+        meeting_id="meeting-id",
+        rows=built_rows,
+    )
+
+    assert len(rows) == 2
+    assert rows[0]["text"] == "A one. A two."
+    assert {row["speaker_label"] for row in rows} == {"spk_a", "spk_b"}
+    assert len(client.participants.rows) == 2
+    assert all(
+        participant["metadata"]["speaker_label_source"] == "provider_detected"
+        for participant in client.participants.rows
+    )
 
 
 def test_build_transcript_rows_falls_back_to_single_text_segment() -> None:

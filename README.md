@@ -164,6 +164,12 @@ meetings owned by the signed-in user. The schema includes reference fields for
 future diarization or voiceprint systems, but MeetingVA AI does not store or
 compare voice biometric data.
 
+Standard OpenAI Whisper transcription does not provide reliable speaker
+diarization in the current implementation. When the provider returns no stable
+speaker identifier, MeetingVA groups adjacent speech under one Unknown Speaker
+that users can split or reassign manually; transcript row order is never used
+as a speaker identity.
+
 Supabase Auth should allow `http://localhost:3000` as a local site/redirect URL.
 
 ## Run Without Docker
