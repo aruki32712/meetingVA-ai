@@ -1317,8 +1317,13 @@ async def _run_transcribe_meeting_job(
         except (AttributeError, TypeError):
             pass
         logger.exception(
-            "transcription processing failed",
-            extra={"job_id": job_id, "meeting_id": meeting_id},
+            "Meeting audio transcription failed",
+            extra={
+                "job_id": job_id,
+                "meeting_id": meeting_id,
+                "exception_type": type(exc).__name__,
+                "exception_message": str(exc),
+            },
         )
         raise RuntimeError("Unable to transcribe meeting audio") from exc
 
