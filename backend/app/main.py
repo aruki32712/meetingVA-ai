@@ -463,13 +463,19 @@ def _update_processing_job(
     job_id: str,
     values: dict[str, Any],
 ) -> dict[str, Any]:
-    response = (
+    (
         service_client.table("processing_jobs")
         .update(values)
         .eq("id", job_id)
+        .execute()
+    )
+    response = (
+        service_client.table("processing_jobs")
         .select(
             "id,meeting_id,job_type,status,started_at,completed_at,error_message,retry_count,worker_version"
         )
+        .eq("id", job_id)
+        .limit(1)
         .execute()
     )
     if not response.data:
