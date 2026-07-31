@@ -1,5 +1,6 @@
 from functools import lru_cache
 
+from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -15,6 +16,10 @@ class Settings(BaseSettings):
     openai_api_key: str = ""
     openai_transcription_model: str = "whisper-1"
     openai_analysis_model: str = "gpt-4o-mini"
+    diarization_provider: str = "none"
+    diarization_api_key: str = ""
+    diarization_minimum_confidence: float = Field(default=0.5, ge=0, le=1)
+    diarization_minimum_timestamp_overlap: float = Field(default=0.5, ge=0, le=1)
     redis_url: str = "redis://redis:6379/0"
     celery_broker_url: str = "redis://redis:6379/0"
     celery_result_backend: str = "redis://redis:6379/1"

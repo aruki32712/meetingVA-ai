@@ -39,6 +39,14 @@ services:
         value: whisper-1
       - key: OPENAI_ANALYSIS_MODEL
         value: gpt-4o-mini
+      - key: DIARIZATION_PROVIDER
+        value: none
+      - key: DIARIZATION_API_KEY
+        sync: false
+      - key: DIARIZATION_MINIMUM_CONFIDENCE
+        value: "0.5"
+      - key: DIARIZATION_MINIMUM_TIMESTAMP_OVERLAP
+        value: "0.5"
       - key: WORKER_VERSION
         value: render
       - key: AI_RATE_LIMIT_REQUESTS
@@ -94,6 +102,14 @@ services:
         value: whisper-1
       - key: OPENAI_ANALYSIS_MODEL
         value: gpt-4o-mini
+      - key: DIARIZATION_PROVIDER
+        value: none
+      - key: DIARIZATION_API_KEY
+        sync: false
+      - key: DIARIZATION_MINIMUM_CONFIDENCE
+        value: "0.5"
+      - key: DIARIZATION_MINIMUM_TIMESTAMP_OVERLAP
+        value: "0.5"
       - key: WORKER_VERSION
         value: render
       - key: REDIS_URL

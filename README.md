@@ -91,6 +91,20 @@ Required AI values:
 - `OPENAI_TRANSCRIPTION_MODEL` defaults to `whisper-1`
 - `OPENAI_ANALYSIS_MODEL` defaults to `gpt-4o-mini`
 
+Optional speaker diarization values:
+
+- `DIARIZATION_PROVIDER` supports `none` (default) and `deepgram`.
+- `DIARIZATION_API_KEY` is required when the provider is `deepgram`.
+- `DIARIZATION_MINIMUM_CONFIDENCE` defaults to `0.5`.
+- `DIARIZATION_MINIMUM_TIMESTAMP_OVERLAP` is the minimum fraction of a
+  transcript segment that must overlap its best diarized turn and defaults to
+  `0.5`.
+
+Deepgram diarization runs against the original meeting audio and supplies only
+anonymous, recording-local speaker IDs. It does not identify a person's voice.
+If the provider is disabled, unconfigured, or unavailable, transcription still
+completes with one Unknown Speaker.
+
 Required job queue values:
 
 - `REDIS_URL` defaults to `redis://redis:6379/0` in Docker

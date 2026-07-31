@@ -1,6 +1,7 @@
 import asyncio
 import json
 import logging
+import mimetypes
 import re
 import time
 from collections import defaultdict, deque
@@ -16,6 +17,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel, Field, field_validator
 
+from app.diarization import align_transcript_rows_to_turns, diarize_audio_safely
 from app.supabase_client import get_supabase_anon_client, get_supabase_service_client
 from app.settings import get_settings
 
@@ -339,6 +341,7 @@ def _build_transcript_rows(
     *,
     original_transcription: dict[str, Any] | None = None,
     transcript_kind: str = "original",
+    merge_adjacent: bool = True,
 ) -> list[dict[str, Any]]:
     segments = transcription.get("segments")
     original_segments = (
@@ -396,7 +399,7 @@ def _build_transcript_rows(
             )
 
         if rows:
-            return _merge_adjacent_speaker_segments(rows)
+            return _merge_adjacent_speaker_segments(rows) if merge_adjacent else rows
 
     transcript_text = str(transcription.get("text") or "").strip()
 
@@ -905,13 +908,21 @@ def _attach_participants_to_transcript_rows(
     if not labels:
         return rows
 
+    detected_display_names = {
+        label: _fallback_speaker_label(index)
+        for index, label in enumerate(
+            label
+            for label in labels
+            if label_sources[label] == "provider_detected"
+        )
+    }
     participant_rows = [
         {
             "meeting_id": meeting_id,
             "display_name": (
                 UNKNOWN_SPEAKER_LABEL
                 if label_sources[label] == "fallback_unknown"
-                else _fallback_speaker_label(index)
+                else detected_display_names[label]
             ),
             "speaker_label": label,
             "source": "transcript",
@@ -924,7 +935,7 @@ def _attach_participants_to_transcript_rows(
                 "speaker_label_source": label_sources[label],
             },
         }
-        for index, label in enumerate(labels)
+        for label in labels
     ]
     created = service_client.table("participants").insert(participant_rows).execute()
     participants_by_label = {
@@ -1366,10 +1377,11 @@ async def _run_transcribe_meeting_job(
             }
 
         filename = Path(audio_storage_path).name or "meeting-audio.webm"
+        content_type = mimetypes.guess_type(filename)[0] or "application/octet-stream"
         transcription = await _transcribe_audio_with_openai(
             audio_bytes=audio_bytes,
             filename=filename,
-            content_type="application/octet-stream",
+            content_type=content_type,
         )
         detected_language = _normalize_language(transcription.get("language"))
         should_translate = translate_to_english and not _is_english_language(
@@ -1399,7 +1411,22 @@ async def _run_transcribe_meeting_job(
             duration_seconds=meeting.get("duration_seconds"),
             original_transcription=transcription,
             transcript_kind=transcript_kind,
+            merge_adjacent=False,
         )
+        diarized_turns = await diarize_audio_safely(
+            audio_bytes=audio_bytes,
+            filename=filename,
+            content_type=content_type,
+            provider=settings.diarization_provider,
+            api_key=settings.diarization_api_key,
+        )
+        rows = align_transcript_rows_to_turns(
+            rows,
+            diarized_turns,
+            minimum_confidence=settings.diarization_minimum_confidence,
+            minimum_overlap=settings.diarization_minimum_timestamp_overlap,
+        )
+        rows = _merge_adjacent_speaker_segments(rows)
 
         (
             service_client.table("transcript_segments")
