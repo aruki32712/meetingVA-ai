@@ -154,6 +154,10 @@ TRANSCRIPTION_UNKNOWN_ERROR = (
 )
 
 
+MAX_SAME_SPEAKER_PAUSE_MS = 1500
+MAX_MERGED_TRANSCRIPT_CHARACTERS = 1500
+
+
 def _utc_now_iso() -> str:
     return datetime.now(UTC).isoformat()
 
@@ -230,6 +234,102 @@ def _extract_speaker_label(segment: dict[str, Any], fallback_index: int) -> str 
     return None
 
 
+def _normalize_speaker_label(value: Any) -> str | None:
+    label = _coerce_optional_text(value)
+    return " ".join(label.split()).casefold() if label else None
+
+
+def _normalize_transcript_spacing(value: Any) -> str | None:
+    text = _coerce_optional_text(value)
+    return " ".join(text.split()) if text else None
+
+
+def _segment_confidence(segment: dict[str, Any]) -> float | None:
+    value = segment.get("confidence")
+
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+
+    return float(value)
+
+
+def _merge_adjacent_speaker_segments(
+    rows: list[dict[str, Any]],
+    *,
+    maximum_pause_ms: int = MAX_SAME_SPEAKER_PAUSE_MS,
+    maximum_characters: int = MAX_MERGED_TRANSCRIPT_CHARACTERS,
+) -> list[dict[str, Any]]:
+    merged_rows: list[dict[str, Any]] = []
+    confidence_values: list[list[float]] = []
+
+    for row in rows:
+        candidate = dict(row)
+        candidate["text"] = _normalize_transcript_spacing(candidate.get("text")) or ""
+        candidate["original_text"] = _normalize_transcript_spacing(
+            candidate.get("original_text")
+        )
+        candidate["translated_text"] = _normalize_transcript_spacing(
+            candidate.get("translated_text")
+        )
+        confidence = candidate.get("confidence")
+        candidate_confidences = (
+            [float(confidence)]
+            if isinstance(confidence, (int, float)) and not isinstance(confidence, bool)
+            else []
+        )
+
+        if merged_rows:
+            current = merged_rows[-1]
+            current_label = _normalize_speaker_label(current.get("speaker_label"))
+            candidate_label = _normalize_speaker_label(candidate.get("speaker_label"))
+            pause_ms = int(candidate.get("start_ms") or 0) - int(
+                current.get("end_ms") or 0
+            )
+            joined_values = {
+                key: _normalize_transcript_spacing(
+                    " ".join(
+                        value
+                        for value in (
+                            _coerce_optional_text(current.get(key)),
+                            _coerce_optional_text(candidate.get(key)),
+                        )
+                        if value
+                    )
+                )
+                for key in ("text", "original_text", "translated_text")
+            }
+            within_character_limit = all(
+                value is None or len(value) <= maximum_characters
+                for value in joined_values.values()
+            )
+            can_merge = (
+                current_label is not None
+                and current_label == candidate_label
+                and 0 <= pause_ms < maximum_pause_ms
+                and current.get("transcript_kind") == candidate.get("transcript_kind")
+                and within_character_limit
+            )
+
+            if can_merge:
+                current.update(joined_values)
+                current["end_ms"] = candidate["end_ms"]
+                confidence_values[-1].extend(candidate_confidences)
+                current["confidence"] = (
+                    sum(confidence_values[-1]) / len(confidence_values[-1])
+                    if confidence_values[-1]
+                    else None
+                )
+                continue
+
+        merged_rows.append(candidate)
+        confidence_values.append(candidate_confidences)
+
+    for index, row in enumerate(merged_rows):
+        row["segment_index"] = index
+
+    return merged_rows
+
+
 def _build_transcript_rows(
     meeting_id: str,
     transcription: dict[str, Any],
@@ -288,13 +388,13 @@ def _build_transcript_rows(
                     if transcript_kind in {"translated", "both"}
                     else None,
                     "transcript_kind": transcript_kind,
-                    "confidence": None,
+                    "confidence": _segment_confidence(segment),
                     "segment_index": index,
                 }
             )
 
         if rows:
-            return rows
+            return _merge_adjacent_speaker_segments(rows)
 
     transcript_text = str(transcription.get("text") or "").strip()
 

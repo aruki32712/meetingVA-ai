@@ -138,6 +138,105 @@ def test_build_transcript_rows_preserves_provider_speaker_label() -> None:
     assert rows[0]["speaker_label"] == "spk_0"
 
 
+def test_build_transcript_rows_groups_consecutive_same_speaker_sentences() -> None:
+    rows = _build_transcript_rows(
+        meeting_id="meeting-id",
+        transcription={
+            "segments": [
+                {
+                    "start": 0,
+                    "end": 1,
+                    "text": "First sentence.",
+                    "speaker_label": "Speaker A",
+                    "confidence": 0.8,
+                },
+                {
+                    "start": 1.4,
+                    "end": 2.5,
+                    "text": "  Second   sentence! ",
+                    "speaker_label": " speaker   a ",
+                    "confidence": 1.0,
+                },
+                {
+                    "start": 2.7,
+                    "end": 3.2,
+                    "text": "Third?",
+                    "speaker_label": "SPEAKER A",
+                },
+            ]
+        },
+        duration_seconds=4,
+    )
+
+    assert len(rows) == 1
+    assert rows[0]["start_ms"] == 0
+    assert rows[0]["end_ms"] == 3200
+    assert rows[0]["text"] == "First sentence. Second sentence! Third?"
+    assert rows[0]["original_text"] == rows[0]["text"]
+    assert rows[0]["confidence"] == pytest.approx(0.9)
+    assert rows[0]["segment_index"] == 0
+
+
+def test_build_transcript_rows_starts_new_turn_when_speaker_changes() -> None:
+    rows = _build_transcript_rows(
+        meeting_id="meeting-id",
+        transcription={
+            "segments": [
+                {"start": 0, "end": 1, "text": "From A.", "speaker": "A"},
+                {"start": 1.1, "end": 2, "text": "From B.", "speaker": "B"},
+            ]
+        },
+        duration_seconds=2,
+    )
+
+    assert [row["speaker_label"] for row in rows] == ["A", "B"]
+    assert [row["text"] for row in rows] == ["From A.", "From B."]
+
+
+def test_build_transcript_rows_starts_new_turn_after_long_pause() -> None:
+    rows = _build_transcript_rows(
+        meeting_id="meeting-id",
+        transcription={
+            "segments": [
+                {"start": 0, "end": 1, "text": "Before pause.", "speaker": "A"},
+                {"start": 2.5, "end": 3, "text": "After pause.", "speaker": "A"},
+            ]
+        },
+        duration_seconds=3,
+    )
+
+    assert len(rows) == 2
+    assert [row["segment_index"] for row in rows] == [0, 1]
+
+
+def test_build_transcript_rows_merges_original_and_translated_text() -> None:
+    rows = _build_transcript_rows(
+        meeting_id="meeting-id",
+        transcription={
+            "segments": [
+                {"start": 0, "end": 1, "text": "Hello.", "speaker": "A"},
+                {"start": 1.2, "end": 2, "text": "How are you?", "speaker": "A"},
+                {"start": 2.1, "end": 3, "text": "Good.", "speaker": "B"},
+            ]
+        },
+        original_transcription={
+            "segments": [
+                {"text": "Hola.", "speaker": "A"},
+                {"text": "¿Cómo estás?", "speaker": "A"},
+                {"text": "Bien.", "speaker": "B"},
+            ]
+        },
+        duration_seconds=3,
+        transcript_kind="both",
+    )
+
+    assert [row["segment_index"] for row in rows] == [0, 1]
+    assert rows[0]["text"] == "Hello. How are you?"
+    assert rows[0]["translated_text"] == "Hello. How are you?"
+    assert rows[0]["original_text"] == "Hola. ¿Cómo estás?"
+    assert " ".join(row["text"] for row in rows) == "Hello. How are you? Good."
+
+
 def test_attach_participants_assigns_fallback_speaker() -> None:
     rows = _attach_participants_to_transcript_rows(
         FakeSupabaseClient(),
