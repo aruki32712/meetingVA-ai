@@ -1,3 +1,5 @@
+import logging
+
 import pytest
 
 from app.main import TRANSCRIPTION_QUOTA_ERROR
@@ -94,8 +96,13 @@ def test_worker_persists_failed_job_before_reraising(monkeypatch):
     monkeypatch.setattr(
         transcription_worker,
         "_mark_processing_job_started",
-        lambda service_client, **kwargs: calls.append(
-            ("started", kwargs["status"])
+        lambda service_client, **kwargs: (
+            calls.append(("started", kwargs["status"]))
+            or {
+                "id": kwargs["job_id"],
+                "status": kwargs["status"],
+                "started_at": "2026-07-31T12:00:00+00:00",
+            }
         ),
     )
     monkeypatch.setattr(
@@ -124,7 +131,11 @@ def test_worker_persists_failed_job_before_reraising(monkeypatch):
     ]
 
 
-def test_worker_moves_queued_job_to_transcribing_then_failed_on_429(monkeypatch):
+def test_worker_moves_queued_job_to_transcribing_then_failed_on_429(
+    monkeypatch,
+    caplog,
+):
+    caplog.set_level(logging.INFO, logger=transcription_worker.__name__)
     client = FakeServiceClient()
 
     async def fail_transcription(**kwargs):
@@ -164,3 +175,22 @@ def test_worker_moves_queued_job_to_transcribing_then_failed_on_429(monkeypatch)
     assert client.row["started_at"] is not None
     assert client.row["completed_at"] is not None
     assert client.row["error_message"] == TRANSCRIPTION_QUOTA_ERROR
+
+    before_update = next(
+        record
+        for record in caplog.records
+        if record.message == "updating transcription job to started"
+    )
+    assert before_update.processing_job_id == client.row["id"]
+    assert before_update.resolved_job_id == client.row["id"]
+    assert before_update.celery_task_id == "different-celery-task-id"
+    assert before_update.meeting_id == "11111111-1111-1111-1111-111111111111"
+
+    after_update = next(
+        record
+        for record in caplog.records
+        if record.message == "transcription job updated to started"
+    )
+    assert after_update.processing_job_id == client.row["id"]
+    assert after_update.processing_job_status == "transcribing"
+    assert after_update.processing_job_started_at is not None

@@ -52,12 +52,28 @@ def transcribe_meeting_task(
             extra={**log_context, "retry_count": self.request.retries},
         )
 
-    logger.info("transcription job started", extra=log_context)
-    _mark_processing_job_started(
+    logger.info(
+        "updating transcription job to started",
+        extra={
+            "processing_job_id": processing_job_id,
+            "resolved_job_id": job_id,
+            "celery_task_id": self.request.id,
+            "meeting_id": meeting_id,
+        },
+    )
+    started_job = _mark_processing_job_started(
         service_client,
         job_id=job_id,
         status="transcribing",
         retry_count=getattr(self.request, "retries", 0),
+    )
+    logger.info(
+        "transcription job updated to started",
+        extra={
+            "processing_job_id": started_job.get("id"),
+            "processing_job_status": started_job.get("status"),
+            "processing_job_started_at": started_job.get("started_at"),
+        },
     )
 
     try:
