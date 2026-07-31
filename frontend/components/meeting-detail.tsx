@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { createBrowserSupabaseClient } from "@/lib/supabase";
 import { formatDate, formatDuration } from "./meeting-utils";
+import { sortTimelineEventsChronologically } from "./processing-timeline-state";
 import {
   getSafeTranscriptionError,
   getTranscriptionUiState
@@ -263,165 +264,50 @@ function buildProcessingTimeline(
   meeting: MeetingDetailRow,
   events: ProcessingEvent[]
 ): TimelineStep[] {
-  const orderedEvents = [...events].sort((left, right) => {
-    const leftTime = getValidTimestamp(left.created_at);
-    const rightTime = getValidTimestamp(right.created_at);
-    const timeDiff =
-      leftTime === null || rightTime === null ? 0 : leftTime - rightTime;
-
-    if (timeDiff !== 0) {
-      return timeDiff;
-    }
-
-    return left.event_order - right.event_order;
-  });
-  const latest = (
-    predicate: (event: ProcessingEvent) => boolean,
-    afterEvent?: ProcessingEvent
-  ) =>
-    [...orderedEvents]
-      .reverse()
-      .find((event) => {
-        if (!predicate(event)) {
-          return false;
-        }
-
-        if (!afterEvent) {
-          return true;
-        }
-
-        const eventTime = getValidTimestamp(event.created_at);
-        const afterTime = getValidTimestamp(afterEvent.created_at);
-
-        return (
-          (eventTime !== null &&
-            afterTime !== null &&
-            eventTime > afterTime) ||
-          ((eventTime === null ||
-            afterTime === null ||
-            eventTime === afterTime) &&
-            event.event_order >= afterEvent.event_order)
-        );
-      });
-  const queued = latest((event) => event.event_type === "queued");
-  const transcriptionQueued = latest(
-    (event) => event.event_type === "queued" && event.job_type === "transcription"
+  const labels: Record<string, string> = {
+    meeting_created: "Meeting Created",
+    audio_uploaded: "Audio Uploaded",
+    queued: "Queued",
+    transcription_started: "Transcribing",
+    transcription_completed: "Transcript Complete",
+    transcription_failed: "Transcription Failed",
+    analysis_started: "Analyzing",
+    analysis_completed: "Analysis Complete",
+    analysis_failed: "Analysis Failed"
+  };
+  const timelineEvents = sortTimelineEventsChronologically(
+    events.filter((event) => event.event_type in labels)
   );
-  const analysisQueued = latest(
-    (event) => event.event_type === "queued" && event.job_type === "analysis"
-  );
-  const transcriptionStarted = latest(
-    (event) => event.event_type === "transcription_started",
-    transcriptionQueued
-  );
-  const transcriptionResult = latest(
-    (event) =>
-      event.event_type === "transcription_completed" ||
-      event.event_type === "transcription_failed",
-    transcriptionQueued
-  );
-  const analysisStarted = latest(
-    (event) => event.event_type === "analysis_started",
-    analysisQueued
-  );
-  const analysisResult = latest(
-    (event) =>
-      event.event_type === "analysis_completed" ||
-      event.event_type === "analysis_failed",
-    analysisQueued
-  );
-  const uploaded = latest((event) => event.event_type === "audio_uploaded");
-  const created = latest((event) => event.event_type === "meeting_created");
+  const steps = timelineEvents.map((event): TimelineStep => ({
+    key: event.id,
+    label: labels[event.event_type],
+    description: event.message,
+    status: event.status,
+    timestamp: event.created_at,
+    errorMessage:
+      event.event_type === "transcription_failed"
+        ? getSafeTranscriptionError(event.error_message)
+        : event.error_message,
+    retryType:
+      event.event_type === "transcription_failed"
+        ? "transcription"
+        : event.event_type === "analysis_failed"
+          ? "analysis"
+          : undefined
+  }));
 
-  const eventStatus = (
-    event: ProcessingEvent | undefined,
-    fallback: TimelineStepStatus = "pending"
-  ): TimelineStepStatus => event?.status ?? fallback;
-  const isLatestQueuedJobStartedOrSettled =
-    queued?.job_type === "transcription"
-      ? Boolean(transcriptionStarted || transcriptionResult)
-      : queued?.job_type === "analysis"
-        ? Boolean(analysisStarted || analysisResult)
-        : Boolean(transcriptionStarted || analysisStarted);
-
-  return [
-    {
+  if (!timelineEvents.some((event) => event.event_type === "meeting_created")) {
+    steps.unshift({
       key: "created",
       label: "Meeting Created",
-      description: created?.message ?? "Meeting record created.",
+      description: "Meeting record created.",
       status: "completed",
-      timestamp: created?.created_at ?? meeting.created_at,
+      timestamp: meeting.created_at,
       errorMessage: null
-    },
-    {
-      key: "uploaded",
-      label: "Audio Uploaded",
-      description:
-        uploaded?.message ?? "Audio will be securely stored for processing.",
-      status: uploaded ? "completed" : "pending",
-      timestamp: uploaded?.created_at ?? null,
-      errorMessage: null
-    },
-    {
-      key: "queued",
-      label: "Queued",
-      description: queued?.message ?? "Processing will begin after a job is queued.",
-      status: queued
-        ? isLatestQueuedJobStartedOrSettled
-          ? "completed"
-          : "current"
-        : "pending",
-      timestamp: queued?.created_at ?? null,
-      errorMessage: null
-    },
-    {
-      key: "transcribing",
-      label: "Transcribing",
-      description:
-        transcriptionStarted?.message ?? "Audio will be converted into a transcript.",
-      status: transcriptionResult
-        ? "completed"
-        : eventStatus(transcriptionStarted),
-      timestamp: transcriptionStarted?.created_at ?? null,
-      errorMessage: null
-    },
-    {
-      key: "transcript-complete",
-      label: "Transcript Complete",
-      description:
-        transcriptionResult?.message ?? "The transcript will be ready for review.",
-      status: eventStatus(transcriptionResult),
-      timestamp: transcriptionResult?.created_at ?? null,
-      errorMessage:
-        transcriptionResult?.event_type === "transcription_failed"
-          ? getSafeTranscriptionError(transcriptionResult.error_message)
-          : null,
-      retryType:
-        transcriptionResult?.event_type === "transcription_failed"
-          ? "transcription"
-          : undefined
-    },
-    {
-      key: "analyzing",
-      label: "Analyzing",
-      description:
-        analysisStarted?.message ?? "The transcript will be analyzed for insights.",
-      status: analysisResult ? "completed" : eventStatus(analysisStarted),
-      timestamp: analysisStarted?.created_at ?? null,
-      errorMessage: null
-    },
-    {
-      key: "analysis-complete",
-      label: "Analysis Complete",
-      description:
-        analysisResult?.message ?? "Structured meeting insights will appear here.",
-      status: eventStatus(analysisResult),
-      timestamp: analysisResult?.created_at ?? null,
-      errorMessage: analysisResult?.error_message ?? null,
-      retryType:
-        analysisResult?.event_type === "analysis_failed" ? "analysis" : undefined
-    }
-  ];
+    });
+  }
+
+  return steps;
 }
 
 export function MeetingDetail({ meetingId }: { meetingId: string }) {
@@ -972,7 +858,7 @@ export function MeetingDetail({ meetingId }: { meetingId: string }) {
       analysisRequestInFlight.current ||
       analysisJobBlocksRequest(
         analysisJob?.status,
-        Boolean(meeting?.summary && meeting?.brief)
+        Boolean(meeting?.summary || meeting?.brief)
       )
     ) {
       return;
@@ -1198,20 +1084,24 @@ export function MeetingDetail({ meetingId }: { meetingId: string }) {
     meeting.status === "processing" && activeJobType !== "analysis";
   const isMeetingAnalyzing =
     shouldShowAnalyzing(analysisJob?.status);
+  const analysisFailed = analysisJob?.status === "failed";
+  const hasCompletedAnalysis =
+    !analysisFailed &&
+    (analysisJob?.status === "analyzed" || Boolean(meeting.summary || meeting.brief));
   const canAnalyze = canStartAnalysis({
     transcriptSegmentCount: transcriptSegments.length,
     ownsMeeting: isOwnedMeeting,
     analysisStatus: analysisJob?.status,
-    hasCompletedInsights: Boolean(meeting.summary && meeting.brief),
+    hasCompletedInsights: Boolean(meeting.summary || meeting.brief),
     requestPending: isRequestingAnalysis
   });
   const analysisButtonLabel =
-    Boolean(analysisError)
+    isMeetingAnalyzing
+      ? "Analyzing…"
+      : Boolean(analysisError) || analysisFailed
       ? "Retry Analysis"
       : isRequestingAnalysis
         ? "Starting analysis..."
-      : isMeetingAnalyzing
-        ? "Processing..."
         : "Generate Analysis";
   const participantById = new Map(
     participants.map((participant, index) => [
@@ -1504,14 +1394,16 @@ export function MeetingDetail({ meetingId }: { meetingId: string }) {
                   : "Generate analysis after the transcript is ready."}
             </p>
           </div>
-          <button
-            className="rounded-md bg-ink px-4 py-2 text-sm font-medium text-white transition hover:bg-slate-700 disabled:cursor-not-allowed disabled:bg-slate-300"
-            type="button"
-            onClick={generateAnalysis}
-            disabled={!canAnalyze}
-          >
-            {analysisButtonLabel}
-          </button>
+          {!hasCompletedAnalysis ? (
+            <button
+              className="rounded-md bg-ink px-4 py-2 text-sm font-medium text-white transition hover:bg-slate-700 disabled:cursor-not-allowed disabled:bg-slate-300"
+              type="button"
+              onClick={generateAnalysis}
+              disabled={isMeetingAnalyzing || !canAnalyze}
+            >
+              {analysisButtonLabel}
+            </button>
+          ) : null}
         </div>
 
         {isMeetingAnalyzing ? (
