@@ -684,6 +684,14 @@ def _enqueue_transcription_job_if_needed(
     from app.workers.transcription_worker import transcribe_meeting_task
 
     try:
+        logger.info(
+            "dispatching transcription task",
+            extra={
+                "processing_job_id": job_id,
+                "meeting_id": meeting_id,
+                "celery_task_name": "meetingva.transcribe_meeting",
+            },
+        )
         transcribe_meeting_task.apply_async(
             kwargs={
                 "meeting_id": meeting_id,

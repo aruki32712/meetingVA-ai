@@ -28,6 +28,14 @@ def transcribe_meeting_task(
     translate_to_english: bool = False,
     processing_job_id: str | None = None,
 ) -> dict[str, Any]:
+    logger.info(
+        "transcription task received",
+        extra={
+            "processing_job_id": processing_job_id,
+            "celery_task_id": self.request.id,
+            "meeting_id": meeting_id,
+        },
+    )
     celery_task_id = self.request.id
     log_context = {
         "processing_job_id": processing_job_id,
