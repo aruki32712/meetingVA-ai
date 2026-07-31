@@ -1414,11 +1414,9 @@ async def _run_transcribe_meeting_job(
             merge_adjacent=False,
         )
         diarized_turns = await diarize_audio_safely(
-            audio_bytes=audio_bytes,
-            filename=filename,
-            content_type=content_type,
-            provider=settings.diarization_provider,
-            api_key=settings.diarization_api_key,
+            audio_bytes,
+            filename,
+            content_type,
         )
         rows = align_transcript_rows_to_turns(
             rows,

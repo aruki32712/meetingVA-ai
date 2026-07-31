@@ -1,4 +1,5 @@
 import asyncio
+import logging
 
 from app import diarization
 from app.diarization import DiarizedTurn, align_transcript_rows_to_turns
@@ -57,12 +58,18 @@ def _align(rows: list[dict], turns: list[DiarizedTurn]) -> list[dict]:
     )
 
 
-def test_three_diarized_speakers_create_three_participants() -> None:
-    rows = [_row(0, 0, 1000, "A"), _row(1, 1000, 2000, "B"), _row(2, 2000, 3000, "C")]
+def test_six_diarized_speakers_create_six_participants_from_long_row() -> None:
+    rows = [
+        _row(
+            0,
+            0,
+            6000,
+            "one two three four five six seven eight nine ten eleven twelve",
+        )
+    ]
     turns = [
-        DiarizedTurn("deepgram:0", 0, 1000, 0.9),
-        DiarizedTurn("deepgram:1", 1000, 2000, 0.9),
-        DiarizedTurn("deepgram:2", 2000, 3000, 0.9),
+        DiarizedTurn(f"deepgram:{index}", index * 1000, (index + 1) * 1000, 0.9)
+        for index in range(6)
     ]
     client = FakeSupabaseClient()
 
@@ -72,8 +79,9 @@ def test_three_diarized_speakers_create_three_participants() -> None:
         rows=_merge_adjacent_speaker_segments(_align(rows, turns)),
     )
 
-    assert len(client.participants.rows) == 3
-    assert len({row["participant_id"] for row in attached}) == 3
+    assert len(client.participants.rows) == 6
+    assert len({row["participant_id"] for row in attached}) == 6
+    assert " ".join(row["text"] for row in attached) == rows[0]["text"]
 
 
 def test_repeated_speaker_turns_reuse_the_same_participant() -> None:
@@ -98,7 +106,7 @@ def test_greatest_timestamp_overlap_assigns_the_speaker() -> None:
     aligned = _align(
         [_row(0, 500, 2000, "Mostly speaker two")],
         [
-            DiarizedTurn("deepgram:0", 0, 800, 0.9),
+            DiarizedTurn("deepgram:0", 0, 900, 0.9),
             DiarizedTurn("deepgram:1", 800, 2200, 0.9),
         ],
     )
@@ -110,8 +118,8 @@ def test_ambiguous_timestamp_overlap_remains_unknown() -> None:
     aligned = _align(
         [_row(0, 0, 1000, "Ambiguous")],
         [
-            DiarizedTurn("deepgram:0", 0, 500, 0.9),
-            DiarizedTurn("deepgram:1", 500, 1000, 0.9),
+            DiarizedTurn("deepgram:0", 0, 700, 0.9),
+            DiarizedTurn("deepgram:1", 300, 1000, 0.9),
         ],
     )
 
@@ -119,22 +127,49 @@ def test_ambiguous_timestamp_overlap_remains_unknown() -> None:
 
 
 def test_diarization_failure_returns_no_turns(monkeypatch) -> None:
-    async def fail_diarization(**kwargs):
+    async def fail_diarization(*args):
         raise RuntimeError("provider unavailable")
 
+    monkeypatch.setattr(
+        diarization,
+        "get_settings",
+        lambda: type(
+            "Settings",
+            (),
+            {"diarization_provider": "deepgram", "diarization_api_key": "secret"},
+        )(),
+    )
     monkeypatch.setattr(diarization, "diarize_audio", fail_diarization)
 
     turns = asyncio.run(
         diarization.diarize_audio_safely(
-            audio_bytes=b"audio",
-            filename="recording.webm",
-            content_type="audio/webm",
-            provider="deepgram",
-            api_key="secret",
+            b"audio",
+            "recording.webm",
+            "audio/webm",
         )
     )
 
     assert turns == []
+
+
+def test_disabled_provider_logs_unknown_speaker_fallback(monkeypatch, caplog) -> None:
+    caplog.set_level(logging.INFO)
+    monkeypatch.setattr(
+        diarization,
+        "get_settings",
+        lambda: type(
+            "Settings",
+            (),
+            {"diarization_provider": "none", "diarization_api_key": ""},
+        )(),
+    )
+
+    turns = asyncio.run(
+        diarization.diarize_audio_safely(b"audio", "recording.webm", "audio/webm")
+    )
+
+    assert turns == []
+    assert "Speaker diarization disabled; using Unknown Speaker fallback." in caplog.text
 
 
 def test_no_diarization_never_uses_row_indexes_as_speaker_labels() -> None:

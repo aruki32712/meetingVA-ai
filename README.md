@@ -100,6 +100,13 @@ Optional speaker diarization values:
   transcript segment that must overlap its best diarized turn and defaults to
   `0.5`.
 
+The Render blueprint enables `deepgram` for both services. Configure
+`DIARIZATION_API_KEY` in Render, especially on the worker service that processes
+audio. Worker startup logs report the selected provider and whether credentials
+are present without printing the credential itself. Each transcription job logs
+whether diarization was attempted and the returned turn and unique-speaker
+counts.
+
 Deepgram diarization runs against the original meeting audio and supplies only
 anonymous, recording-local speaker IDs. It does not identify a person's voice.
 If the provider is disabled, unconfigured, or unavailable, transcription still

@@ -40,7 +40,7 @@ services:
       - key: OPENAI_ANALYSIS_MODEL
         value: gpt-4o-mini
       - key: DIARIZATION_PROVIDER
-        value: none
+        value: deepgram
       - key: DIARIZATION_API_KEY
         sync: false
       - key: DIARIZATION_MINIMUM_CONFIDENCE
@@ -103,7 +103,7 @@ services:
       - key: OPENAI_ANALYSIS_MODEL
         value: gpt-4o-mini
       - key: DIARIZATION_PROVIDER
-        value: none
+        value: deepgram
       - key: DIARIZATION_API_KEY
         sync: false
       - key: DIARIZATION_MINIMUM_CONFIDENCE

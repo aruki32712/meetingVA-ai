@@ -5,6 +5,7 @@ from urllib.parse import urlsplit
 from celery import Celery
 from celery.signals import worker_ready
 
+from app.diarization import diarization_status
 from app.settings import get_settings
 
 settings = get_settings()
@@ -58,5 +59,6 @@ def log_worker_configuration(sender: object | None = None, **_: object) -> None:
             "registered_celery_tasks": sorted(
                 name for name in celery_app.tasks if name.startswith("meetingva.")
             ),
+            **diarization_status(),
         },
     )

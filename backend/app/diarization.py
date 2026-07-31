@@ -4,6 +4,8 @@ from typing import Any
 
 import httpx
 
+from app.settings import get_settings
+
 logger = logging.getLogger(__name__)
 
 
@@ -96,14 +98,26 @@ async def _diarize_with_deepgram(
     return _deepgram_turns(response.json())
 
 
+def diarization_status() -> dict[str, str | bool]:
+    settings = get_settings()
+    provider = settings.diarization_provider.strip().casefold()
+    enabled = provider not in {"", "none", "disabled"}
+    credentials_configured = bool(settings.diarization_api_key.strip())
+    return {
+        "diarization_provider": provider or "none",
+        "diarization_enabled": enabled,
+        "diarization_credentials_configured": credentials_configured,
+    }
+
+
 async def diarize_audio(
-    *,
     audio_bytes: bytes,
     filename: str,
     content_type: str,
-    provider: str,
-    api_key: str = "",
 ) -> list[DiarizedTurn]:
+    settings = get_settings()
+    provider = settings.diarization_provider
+    api_key = settings.diarization_api_key
     normalized_provider = provider.strip().casefold()
 
     if normalized_provider in {"", "none", "disabled"}:
@@ -121,31 +135,126 @@ async def diarize_audio(
 
 
 async def diarize_audio_safely(
-    *,
     audio_bytes: bytes,
     filename: str,
     content_type: str,
-    provider: str,
-    api_key: str = "",
 ) -> list[DiarizedTurn]:
-    try:
-        return await diarize_audio(
-            audio_bytes=audio_bytes,
-            filename=filename,
-            content_type=content_type,
-            provider=provider,
-            api_key=api_key,
+    status = diarization_status()
+
+    if not status["diarization_enabled"]:
+        logger.info(
+            "Speaker diarization disabled; using Unknown Speaker fallback.",
+            extra={
+                **status,
+                "diarization_attempted": False,
+                "diarized_turn_count": 0,
+                "diarized_speaker_count": 0,
+            },
         )
+        return []
+
+    logger.info(
+        "Attempting hosted speaker diarization",
+        extra={**status, "diarization_attempted": True, "audio_filename": filename},
+    )
+
+    try:
+        turns = await diarize_audio(audio_bytes, filename, content_type)
+        logger.info(
+            "Hosted speaker diarization completed",
+            extra={
+                **status,
+                "diarization_attempted": True,
+                "diarized_turn_count": len(turns),
+                "diarized_speaker_count": len(
+                    {turn.speaker_id for turn in turns}
+                ),
+            },
+        )
+        return turns
     except Exception as exc:
         logger.exception(
             "Speaker diarization failed; continuing without provider labels",
             extra={
-                "diarization_provider": provider,
+                **status,
                 "audio_filename": filename,
+                "diarization_attempted": True,
+                "diarized_turn_count": 0,
+                "diarized_speaker_count": 0,
                 "exception_type": type(exc).__name__,
             },
         )
         return []
+
+
+def _split_text_by_weights(text: Any, weights: list[int]) -> list[str | None]:
+    normalized = " ".join(str(text or "").split())
+
+    if not normalized:
+        return [None] * len(weights)
+
+    words = normalized.split(" ")
+    total_weight = max(1, sum(weights))
+    boundaries = [0]
+    cumulative_weight = 0
+
+    for weight in weights[:-1]:
+        cumulative_weight += weight
+        boundaries.append(round(len(words) * cumulative_weight / total_weight))
+
+    boundaries.append(len(words))
+    return [
+        " ".join(words[boundaries[index] : boundaries[index + 1]]) or None
+        for index in range(len(weights))
+    ]
+
+
+def _split_row_at_diarized_turns(
+    row: dict[str, Any],
+    candidates: list[tuple[int, DiarizedTurn]],
+) -> list[dict[str, Any]] | None:
+    ordered = sorted(candidates, key=lambda candidate: candidate[1].start_ms)
+
+    if any(
+        current[1].end_ms > following[1].start_ms
+        and current[1].speaker_id != following[1].speaker_id
+        for current, following in zip(ordered, ordered[1:])
+    ):
+        return None
+
+    pieces = [
+        (
+            max(int(row.get("start_ms") or 0), turn.start_ms),
+            min(int(row.get("end_ms") or 0), turn.end_ms),
+            turn,
+            overlap,
+        )
+        for overlap, turn in ordered
+    ]
+    weights = [piece[3] for piece in pieces]
+    split_values = {
+        field: _split_text_by_weights(row.get(field), weights)
+        for field in ("text", "original_text", "translated_text")
+    }
+    split_rows: list[dict[str, Any]] = []
+
+    for index, (start_ms, end_ms, turn, _) in enumerate(pieces):
+        split_row = dict(row)
+        split_row.update(
+            {
+                "speaker_label": turn.speaker_id,
+                "start_ms": start_ms,
+                "end_ms": end_ms,
+                "text": split_values["text"][index] or "",
+                "original_text": split_values["original_text"][index],
+                "translated_text": split_values["translated_text"][index],
+            }
+        )
+
+        if split_row["text"]:
+            split_rows.append(split_row)
+
+    return split_rows or None
 
 
 def align_transcript_rows_to_turns(
@@ -174,6 +283,27 @@ def align_transcript_rows_to_turns(
                 candidates.append((overlap_ms, turn))
 
         candidates.sort(key=lambda candidate: candidate[0], reverse=True)
+        eligible_candidates = [
+            candidate
+            for candidate in candidates
+            if candidate[1].confidence is None
+            or candidate[1].confidence >= minimum_confidence
+        ]
+        distinct_speakers = {
+            turn.speaker_id for _, turn in eligible_candidates
+        }
+        covered_duration = sum(overlap for overlap, _ in eligible_candidates)
+
+        if (
+            len(distinct_speakers) > 1
+            and covered_duration / duration_ms >= minimum_overlap
+        ):
+            split_rows = _split_row_at_diarized_turns(row, eligible_candidates)
+
+            if split_rows is not None:
+                aligned_rows.extend(split_rows)
+                continue
+
         best_overlap, best_turn = candidates[0] if candidates else (0, None)
         ambiguous = (
             len(candidates) > 1
@@ -199,5 +329,8 @@ def align_transcript_rows_to_turns(
             else None
         )
         aligned_rows.append(aligned)
+
+    for index, row in enumerate(aligned_rows):
+        row["segment_index"] = index
 
     return aligned_rows
