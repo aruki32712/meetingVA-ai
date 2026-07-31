@@ -45,6 +45,8 @@ type Database = {
           source: string | null;
           audio_storage_path: string | null;
           duration_seconds: number | null;
+          summary: string | null;
+          brief: string | null;
           created_at: string;
           updated_at: string;
         };
@@ -60,6 +62,8 @@ type Database = {
           source?: string | null;
           audio_storage_path?: string | null;
           duration_seconds?: number | null;
+          summary?: string | null;
+          brief?: string | null;
           created_at?: string;
           updated_at?: string;
         };
@@ -75,6 +79,8 @@ type Database = {
           source?: string | null;
           audio_storage_path?: string | null;
           duration_seconds?: number | null;
+          summary?: string | null;
+          brief?: string | null;
           created_at?: string;
           updated_at?: string;
         };

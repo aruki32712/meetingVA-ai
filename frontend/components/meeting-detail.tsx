@@ -10,6 +10,7 @@ import {
 } from "./transcription-job-state";
 import {
   analysisJobBlocksRequest,
+  canStartAnalysis,
   isAnalysisJobActive,
   requestAnalysisJob,
   shouldAutomaticallyStartAnalysis,
@@ -445,6 +446,7 @@ export function MeetingDetail({ meetingId }: { meetingId: string }) {
   const [isTranscribing, setIsTranscribing] = useState(false);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [isRequestingAnalysis, setIsRequestingAnalysis] = useState(false);
+  const [isOwnedMeeting, setIsOwnedMeeting] = useState(false);
   const [transcriptionJob, setTranscriptionJob] =
     useState<TranscriptionJob | null>(null);
   const [analysisJob, setAnalysisJob] = useState<AnalysisJobSummary | null>(null);
@@ -472,7 +474,7 @@ export function MeetingDetail({ meetingId }: { meetingId: string }) {
     const { data, error: meetingError } = await supabase
       .from("meetings")
       .select(
-        "id,title,description,status,scheduled_at,audio_storage_path,duration_seconds,created_at"
+        "id,owner_id,title,description,status,scheduled_at,audio_storage_path,duration_seconds,summary,brief,created_at"
       )
       .eq("id", meetingId)
       .eq("owner_id", userData.user.id)
@@ -590,8 +592,6 @@ export function MeetingDetail({ meetingId }: { meetingId: string }) {
     return {
       meeting: {
         ...data,
-        summary: null,
-        brief: null,
         detected_language: null,
         transcript_language: null,
         translation_language: null,
@@ -607,7 +607,8 @@ export function MeetingDetail({ meetingId }: { meetingId: string }) {
       questions: questionRows ?? [],
       processingEvents: eventRows ?? [],
       transcriptionJob: (transcriptionJobs?.[0] ?? null) as TranscriptionJob | null,
-      analysisJob: (analysisJobs?.[0] ?? null) as AnalysisJobSummary | null
+      analysisJob: (analysisJobs?.[0] ?? null) as AnalysisJobSummary | null,
+      isOwnedMeeting: data.owner_id === userData.user.id
     };
   }, [meetingId]);
 
@@ -652,6 +653,7 @@ export function MeetingDetail({ meetingId }: { meetingId: string }) {
             ? "completed"
             : result.meeting.status
     });
+    setIsOwnedMeeting(result.isOwnedMeeting);
     setAudioUrl(result.audioUrl);
     setTranscriptSegments(result.transcriptSegments);
     setParticipants(result.participants);
@@ -729,6 +731,7 @@ export function MeetingDetail({ meetingId }: { meetingId: string }) {
                   ? "completed"
                   : result.meeting.status
           });
+          setIsOwnedMeeting(result.isOwnedMeeting);
           setAudioUrl(result.audioUrl);
           setTranscriptSegments(result.transcriptSegments);
           setParticipants(result.participants);
@@ -967,7 +970,10 @@ export function MeetingDetail({ meetingId }: { meetingId: string }) {
   const generateAnalysis = useCallback(async () => {
     if (
       analysisRequestInFlight.current ||
-      analysisJobBlocksRequest(analysisJob?.status)
+      analysisJobBlocksRequest(
+        analysisJob?.status,
+        Boolean(meeting?.summary && meeting?.brief)
+      )
     ) {
       return;
     }
@@ -1020,7 +1026,14 @@ export function MeetingDetail({ meetingId }: { meetingId: string }) {
       setIsRequestingAnalysis(false);
       analysisRequestInFlight.current = false;
     }
-  }, [analysisJob?.status, getAccessToken, meetingId, pollJobUntilSettled]);
+  }, [
+    analysisJob?.status,
+    getAccessToken,
+    meeting?.brief,
+    meeting?.summary,
+    meetingId,
+    pollJobUntilSettled
+  ]);
 
   useEffect(() => {
     if (
@@ -1184,15 +1197,14 @@ export function MeetingDetail({ meetingId }: { meetingId: string }) {
     isTranscribing ||
     meeting.status === "processing" && activeJobType !== "analysis";
   const isMeetingAnalyzing =
-    shouldShowAnalyzing(
-      analysisJob?.status,
-      isAnalyzing && activeJobType === "analysis"
-    );
-  const canAnalyze =
-    transcriptSegments.length > 0 &&
-    !isProcessingActive &&
-    !isRequestingAnalysis &&
-    !analysisJobBlocksRequest(analysisJob?.status);
+    shouldShowAnalyzing(analysisJob?.status);
+  const canAnalyze = canStartAnalysis({
+    transcriptSegmentCount: transcriptSegments.length,
+    ownsMeeting: isOwnedMeeting,
+    analysisStatus: analysisJob?.status,
+    hasCompletedInsights: Boolean(meeting.summary && meeting.brief),
+    requestPending: isRequestingAnalysis
+  });
   const analysisButtonLabel =
     Boolean(analysisError)
       ? "Retry Analysis"

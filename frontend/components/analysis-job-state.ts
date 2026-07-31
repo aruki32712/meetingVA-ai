@@ -17,10 +17,14 @@ export function isAnalysisJobActive(status: string | null | undefined) {
   return Boolean(status && activeAnalysisStatuses.has(status));
 }
 
-export function analysisJobBlocksRequest(status: string | null | undefined) {
+export function analysisJobBlocksRequest(
+  status: string | null | undefined,
+  hasCompletedInsights = false
+) {
   return Boolean(
     status &&
-      (activeAnalysisStatuses.has(status) || completedAnalysisStatuses.has(status))
+      (activeAnalysisStatuses.has(status) ||
+        (completedAnalysisStatuses.has(status) && hasCompletedInsights))
   );
 }
 
@@ -35,10 +39,30 @@ export function shouldAutomaticallyStartAnalysis(
 }
 
 export function shouldShowAnalyzing(
-  analysisStatus: string | null | undefined,
-  requestAccepted: boolean
+  analysisStatus: string | null | undefined
 ) {
-  return requestAccepted || isAnalysisJobActive(analysisStatus);
+  return isAnalysisJobActive(analysisStatus);
+}
+
+export function canStartAnalysis({
+  transcriptSegmentCount,
+  ownsMeeting,
+  analysisStatus,
+  hasCompletedInsights,
+  requestPending
+}: {
+  transcriptSegmentCount: number;
+  ownsMeeting: boolean;
+  analysisStatus: string | null | undefined;
+  hasCompletedInsights: boolean;
+  requestPending: boolean;
+}) {
+  return (
+    transcriptSegmentCount > 0 &&
+    ownsMeeting &&
+    !requestPending &&
+    !analysisJobBlocksRequest(analysisStatus, hasCompletedInsights)
+  );
 }
 
 export async function requestAnalysisJob({
