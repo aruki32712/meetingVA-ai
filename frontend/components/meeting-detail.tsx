@@ -1,13 +1,21 @@
 "use client";
 
 import Link from "next/link";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { createBrowserSupabaseClient } from "@/lib/supabase";
 import { formatDate, formatDuration } from "./meeting-utils";
 import {
   getSafeTranscriptionError,
   getTranscriptionUiState
 } from "./transcription-job-state";
+import {
+  analysisJobBlocksRequest,
+  isAnalysisJobActive,
+  requestAnalysisJob,
+  shouldAutomaticallyStartAnalysis,
+  shouldShowAnalyzing,
+  type AnalysisJobSummary
+} from "./analysis-job-state";
 
 type MeetingDetailRow = {
   id: string;
@@ -436,6 +444,11 @@ export function MeetingDetail({ meetingId }: { meetingId: string }) {
   const [isLoading, setIsLoading] = useState(true);
   const [isTranscribing, setIsTranscribing] = useState(false);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
+  const [isRequestingAnalysis, setIsRequestingAnalysis] = useState(false);
+  const [transcriptionJob, setTranscriptionJob] =
+    useState<TranscriptionJob | null>(null);
+  const [analysisJob, setAnalysisJob] = useState<AnalysisJobSummary | null>(null);
+  const analysisRequestInFlight = useRef(false);
   const [activeJobId, setActiveJobId] = useState("");
   const [activeJobType, setActiveJobType] = useState<
     "transcription" | "analysis" | ""
@@ -547,6 +560,18 @@ export function MeetingDetail({ meetingId }: { meetingId: string }) {
       throw transcriptionJobError;
     }
 
+    const { data: analysisJobs, error: analysisJobError } = await supabase
+      .from("processing_jobs")
+      .select("id,status,error_message")
+      .eq("meeting_id", meetingId)
+      .eq("job_type", "analysis")
+      .order("created_at", { ascending: false })
+      .limit(1);
+
+    if (analysisJobError) {
+      throw analysisJobError;
+    }
+
     let signedAudioUrl = "";
 
     if (data.audio_storage_path) {
@@ -581,11 +606,12 @@ export function MeetingDetail({ meetingId }: { meetingId: string }) {
       decisions: decisionRows ?? [],
       questions: questionRows ?? [],
       processingEvents: eventRows ?? [],
-      transcriptionJob: (transcriptionJobs?.[0] ?? null) as TranscriptionJob | null
+      transcriptionJob: (transcriptionJobs?.[0] ?? null) as TranscriptionJob | null,
+      analysisJob: (analysisJobs?.[0] ?? null) as AnalysisJobSummary | null
     };
   }, [meetingId]);
 
-  async function getAccessToken() {
+  const getAccessToken = useCallback(async () => {
     const supabase = createBrowserSupabaseClient();
     const { data: sessionData, error: sessionError } =
       await supabase.auth.getSession();
@@ -601,18 +627,30 @@ export function MeetingDetail({ meetingId }: { meetingId: string }) {
     }
 
     return accessToken;
-  }
+  }, []);
 
   const refreshMeetingData = useCallback(async () => {
     const result = await loadMeeting();
     const transcriptionJob = result.transcriptionJob;
+    const analysisJob = result.analysisJob;
     const transcriptionIsActive = Boolean(
       transcriptionJob && isActiveProcessingStatus(transcriptionJob.status)
+    );
+    const analysisIsActive = isAnalysisJobActive(analysisJob?.status);
+    const hasSettledProcessingJob = Boolean(
+      transcriptionJob && isTerminalProcessingStatus(transcriptionJob.status)
+    ) || Boolean(
+      analysisJob && isTerminalProcessingStatus(analysisJob.status)
     );
 
     setMeeting({
       ...result.meeting,
-      status: transcriptionIsActive ? "processing" : result.meeting.status
+      status:
+        transcriptionIsActive || analysisIsActive
+          ? "processing"
+          : hasSettledProcessingJob
+            ? "completed"
+            : result.meeting.status
     });
     setAudioUrl(result.audioUrl);
     setTranscriptSegments(result.transcriptSegments);
@@ -630,7 +668,13 @@ export function MeetingDetail({ meetingId }: { meetingId: string }) {
     setDecisions(result.decisions);
     setQuestions(result.questions);
     setProcessingEvents(result.processingEvents);
-    if (transcriptionIsActive && transcriptionJob) {
+    setTranscriptionJob(transcriptionJob);
+    setAnalysisJob(analysisJob);
+    if (analysisIsActive && analysisJob) {
+      setActiveJobId(analysisJob.id);
+      setActiveJobType("analysis");
+      setAnalysisError("");
+    } else if (transcriptionIsActive && transcriptionJob) {
       setActiveJobId(transcriptionJob.id);
       setActiveJobType("transcription");
       setTranscriptionError("");
@@ -644,6 +688,13 @@ export function MeetingDetail({ meetingId }: { meetingId: string }) {
       } else if (transcriptionJob?.status === "transcribed") {
         setTranscriptionError("");
       }
+    }
+    if (analysisJob?.status === "failed") {
+      setAnalysisError(
+        analysisJob.error_message ?? "Unable to generate analysis."
+      );
+    } else if (analysisJob?.status === "analyzed") {
+      setAnalysisError("");
     }
   }, [loadMeeting]);
 
@@ -659,12 +710,24 @@ export function MeetingDetail({ meetingId }: { meetingId: string }) {
 
         if (isMounted) {
           const transcriptionJob = result.transcriptionJob;
+          const analysisJob = result.analysisJob;
           const transcriptionIsActive = Boolean(
             transcriptionJob && isActiveProcessingStatus(transcriptionJob.status)
           );
+          const analysisIsActive = isAnalysisJobActive(analysisJob?.status);
+          const hasSettledProcessingJob = Boolean(
+            transcriptionJob && isTerminalProcessingStatus(transcriptionJob.status)
+          ) || Boolean(
+            analysisJob && isTerminalProcessingStatus(analysisJob.status)
+          );
           setMeeting({
             ...result.meeting,
-            status: transcriptionIsActive ? "processing" : result.meeting.status
+            status:
+              transcriptionIsActive || analysisIsActive
+                ? "processing"
+                : hasSettledProcessingJob
+                  ? "completed"
+                  : result.meeting.status
           });
           setAudioUrl(result.audioUrl);
           setTranscriptSegments(result.transcriptSegments);
@@ -682,7 +745,13 @@ export function MeetingDetail({ meetingId }: { meetingId: string }) {
           setDecisions(result.decisions);
           setQuestions(result.questions);
           setProcessingEvents(result.processingEvents);
-          if (transcriptionIsActive && transcriptionJob) {
+          setTranscriptionJob(transcriptionJob);
+          setAnalysisJob(analysisJob);
+          if (analysisIsActive && analysisJob) {
+            setActiveJobId(analysisJob.id);
+            setActiveJobType("analysis");
+            setAnalysisError("");
+          } else if (transcriptionIsActive && transcriptionJob) {
             setActiveJobId(transcriptionJob.id);
             setActiveJobType("transcription");
             setTranscriptionError("");
@@ -700,6 +769,13 @@ export function MeetingDetail({ meetingId }: { meetingId: string }) {
                 `meeting-transcription-error:${meetingId}`
               );
             }
+          }
+          if (analysisJob?.status === "failed") {
+            setAnalysisError(
+              analysisJob.error_message ?? "Unable to generate analysis."
+            );
+          } else if (analysisJob?.status === "analyzed") {
+            setAnalysisError("");
           }
         }
       } catch (loadError) {
@@ -740,7 +816,7 @@ export function MeetingDetail({ meetingId }: { meetingId: string }) {
     };
   }, [meeting?.status, refreshMeetingData]);
 
-  async function pollJobUntilSettled(jobId: string) {
+  const pollJobUntilSettled = useCallback(async (jobId: string) => {
     const accessToken = await getAccessToken();
 
     while (true) {
@@ -778,7 +854,7 @@ export function MeetingDetail({ meetingId }: { meetingId: string }) {
         return status;
       }
     }
-  }
+  }, [getAccessToken, meetingId, refreshMeetingData]);
 
   async function cancelProcessing() {
     if (!activeJobId) {
@@ -888,33 +964,32 @@ export function MeetingDetail({ meetingId }: { meetingId: string }) {
     }
   }
 
-  async function generateAnalysis() {
-    setIsAnalyzing(true);
+  const generateAnalysis = useCallback(async () => {
+    if (
+      analysisRequestInFlight.current ||
+      analysisJobBlocksRequest(analysisJob?.status)
+    ) {
+      return;
+    }
+
+    analysisRequestInFlight.current = true;
+    setIsRequestingAnalysis(true);
     setAnalysisError("");
 
     try {
       const accessToken = await getAccessToken();
-
-      setMeeting((current) =>
-        current ? { ...current, status: "processing" } : current
-      );
-
-      const response = await fetch(
-        `${apiBaseUrl}/v1/meetings/${meetingId}/analyze`,
-        {
-          method: "POST",
-          headers: {
-            Authorization: `Bearer ${accessToken}`
-          }
-        }
-      );
-
-      if (!response.ok) {
-        const payload = await response.json().catch(() => null);
-        throw new Error(payload?.detail ?? "Unable to generate analysis.");
-      }
-
-      const payload = (await response.json()) as JobEnqueueResponse;
+      const payload = await requestAnalysisJob({
+        apiBaseUrl,
+        meetingId,
+        accessToken
+      });
+      const acceptedJob: AnalysisJobSummary = {
+        id: payload.job_id,
+        status: payload.processing_status,
+        error_message: null
+      };
+      setAnalysisJob(acceptedJob);
+      setIsAnalyzing(true);
       setActiveJobId(payload.job_id);
       setActiveJobType("analysis");
       setMeeting((current) =>
@@ -933,9 +1008,6 @@ export function MeetingDetail({ meetingId }: { meetingId: string }) {
         throw new Error(status.error_message ?? "Unable to generate analysis.");
       }
     } catch (analyzeError) {
-      setMeeting((current) =>
-        current ? { ...current, status: "processing" } : current
-      );
       setAnalysisError(
         analyzeError instanceof Error
           ? analyzeError.message
@@ -945,8 +1017,23 @@ export function MeetingDetail({ meetingId }: { meetingId: string }) {
       setActiveJobId("");
       setActiveJobType("");
       setIsAnalyzing(false);
+      setIsRequestingAnalysis(false);
+      analysisRequestInFlight.current = false;
     }
-  }
+  }, [analysisJob?.status, getAccessToken, meetingId, pollJobUntilSettled]);
+
+  useEffect(() => {
+    if (
+      !shouldAutomaticallyStartAnalysis(
+        transcriptionJob?.status,
+        analysisJob?.status
+      )
+    ) {
+      return;
+    }
+
+    void generateAnalysis();
+  }, [analysisJob?.status, generateAnalysis, transcriptionJob?.status]);
 
   async function saveParticipantName(participantId: string) {
     setIsSavingSpeaker(true);
@@ -1097,13 +1184,20 @@ export function MeetingDetail({ meetingId }: { meetingId: string }) {
     isTranscribing ||
     meeting.status === "processing" && activeJobType !== "analysis";
   const isMeetingAnalyzing =
-    isAnalyzing ||
-    meeting.status === "processing" && activeJobType === "analysis";
+    shouldShowAnalyzing(
+      analysisJob?.status,
+      isAnalyzing && activeJobType === "analysis"
+    );
   const canAnalyze =
-    transcriptSegments.length > 0 && !isProcessingActive;
+    transcriptSegments.length > 0 &&
+    !isProcessingActive &&
+    !isRequestingAnalysis &&
+    !analysisJobBlocksRequest(analysisJob?.status);
   const analysisButtonLabel =
     Boolean(analysisError)
       ? "Retry Analysis"
+      : isRequestingAnalysis
+        ? "Starting analysis..."
       : isMeetingAnalyzing
         ? "Processing..."
         : "Generate Analysis";
