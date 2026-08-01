@@ -4,7 +4,11 @@ import Link from "next/link";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { createBrowserSupabaseClient } from "@/lib/supabase";
 import { formatDate, formatDuration } from "./meeting-utils";
-import { sortTimelineEventsChronologically } from "./processing-timeline-state";
+import {
+  normalizeTimelineVisualStates,
+  timelineStatusPresentation,
+  type TimelineVisualStatus
+} from "./processing-timeline-state";
 import {
   getSafeTranscriptionError,
   getTranscriptionUiState
@@ -43,19 +47,17 @@ type ProcessingEvent = {
   event_order: number;
   job_type: "transcription" | "analysis" | null;
   event_type: string;
-  status: "pending" | "current" | "completed" | "failed";
+  status: TimelineVisualStatus;
   message: string;
   error_message: string | null;
   created_at: string | null;
 };
 
-type TimelineStepStatus = "pending" | "current" | "completed" | "failed";
-
 type TimelineStep = {
   key: string;
   label: string;
   description: string;
-  status: TimelineStepStatus;
+  status: TimelineVisualStatus;
   timestamp: string | null;
   errorMessage: string | null;
   retryType?: "transcription" | "analysis";
@@ -271,11 +273,13 @@ function buildProcessingTimeline(
     transcription_started: "Transcribing",
     transcription_completed: "Transcript Complete",
     transcription_failed: "Transcription Failed",
+    transcription_cancelled: "Transcription Cancelled",
     analysis_started: "Analyzing",
     analysis_completed: "Analysis Complete",
-    analysis_failed: "Analysis Failed"
+    analysis_failed: "Analysis Failed",
+    analysis_cancelled: "Analysis Cancelled"
   };
-  const timelineEvents = sortTimelineEventsChronologically(
+  const timelineEvents = normalizeTimelineVisualStates(
     events.filter((event) => event.event_type in labels)
   );
   const steps = timelineEvents.map((event): TimelineStep => ({
@@ -1295,42 +1299,24 @@ export function MeetingDetail({ meetingId }: { meetingId: string }) {
         </div>
         <ol className="mt-6">
           {processingTimeline.map((step, index) => {
-            const isFailed = step.status === "failed";
-            const isCurrent = step.status === "current";
-            const isCompleted = step.status === "completed";
+            const presentation = timelineStatusPresentation[step.status];
 
             return (
               <li className="relative flex gap-4 pb-6 last:pb-0" key={step.key}>
                 {index < processingTimeline.length - 1 ? (
                   <span
                     aria-hidden="true"
-                    className={`absolute left-[0.6875rem] top-6 h-[calc(100%-0.5rem)] w-0.5 ${
-                      isCompleted ? "bg-emerald-300" : "bg-slate-200"
-                    }`}
+                    className={`absolute left-[0.6875rem] top-6 h-[calc(100%-0.5rem)] w-0.5 ${presentation.connectorClass}`}
                   />
                 ) : null}
                 <span
                   aria-hidden="true"
-                  className={`relative z-10 mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-full border-2 text-xs font-bold ${
-                    isFailed
-                      ? "border-red-500 bg-red-100 text-red-700"
-                      : isCurrent
-                        ? "border-blue-500 bg-blue-100 text-blue-700"
-                        : isCompleted
-                          ? "border-emerald-500 bg-emerald-100 text-emerald-700"
-                          : "border-slate-300 bg-white text-slate-400"
-                  }`}
+                  className={`relative z-10 mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-full border-2 text-xs font-bold ${presentation.markerClass}`}
                 >
-                  {isFailed ? "!" : isCompleted ? "✓" : index + 1}
+                  {presentation.marker ?? index + 1}
                 </span>
                 <div
-                  className={`min-w-0 flex-1 rounded-lg border p-4 ${
-                    isFailed
-                      ? "border-red-200 bg-red-50"
-                      : isCurrent
-                        ? "border-blue-200 bg-blue-50"
-                        : "border-slate-200 bg-slate-50"
-                  }`}
+                  className={`min-w-0 flex-1 rounded-lg border p-4 ${presentation.cardClass}`}
                 >
                   <div className="flex flex-wrap items-start justify-between gap-2">
                     <div>
@@ -1338,17 +1324,9 @@ export function MeetingDetail({ meetingId }: { meetingId: string }) {
                       <p className="mt-1 text-sm text-slate-600">{step.description}</p>
                     </div>
                     <span
-                      className={`rounded-full px-2.5 py-1 text-xs font-semibold capitalize ${
-                        isFailed
-                          ? "bg-red-100 text-red-700"
-                          : isCurrent
-                            ? "bg-blue-100 text-blue-700"
-                            : isCompleted
-                              ? "bg-emerald-100 text-emerald-700"
-                              : "bg-slate-200 text-slate-600"
-                      }`}
+                      className={`rounded-full px-2.5 py-1 text-xs font-semibold ${presentation.badgeClass}`}
                     >
-                      {step.status}
+                      {presentation.label}
                     </span>
                   </div>
                   <p className="mt-2 text-xs text-slate-500">
