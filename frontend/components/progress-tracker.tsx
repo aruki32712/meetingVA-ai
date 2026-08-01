@@ -2,8 +2,12 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { createBrowserSupabaseClient } from "@/lib/supabase";
+import {
+  buildProgressTrackerSeed,
+  type SeededProgressStatus
+} from "./progress-tracker-seed";
 
-type PhaseStatus = "not_started" | "in_progress" | "blocked" | "complete";
+type PhaseStatus = SeededProgressStatus;
 
 type ProgressPhaseRow = {
   id: string;
@@ -30,109 +34,11 @@ type ProgressPhase = ProgressPhaseRow & {
   checklistItems: ChecklistItemRow[];
 };
 
-type DefaultPhase = {
-  title: string;
-  description: string;
-  status: PhaseStatus;
-  checklistItems: Array<{ label: string; isComplete: boolean }>;
-};
-
 const statusOptions: Array<{ value: PhaseStatus; label: string }> = [
   { value: "not_started", label: "Not started" },
   { value: "in_progress", label: "In progress" },
   { value: "blocked", label: "Blocked" },
   { value: "complete", label: "Complete" }
-];
-
-const defaultPhases: DefaultPhase[] = [
-  {
-    title: "Project Scaffold",
-    description:
-      "Create the full-stack project structure, local runtime, and health checks.",
-    status: "complete",
-    checklistItems: [
-      { label: "Create frontend and backend applications", isComplete: true },
-      { label: "Add Docker development setup", isComplete: true },
-      { label: "Document local run commands", isComplete: true }
-    ]
-  },
-  {
-    title: "Supabase Configuration",
-    description:
-      "Connect Supabase Auth, PostgreSQL, Storage, and environment templates.",
-    status: "complete",
-    checklistItems: [
-      { label: "Add initial database schema", isComplete: true },
-      { label: "Configure private meeting attachment storage", isComplete: true },
-      { label: "Document Supabase setup", isComplete: true }
-    ]
-  },
-  {
-    title: "User Authentication",
-    description:
-      "Allow users to sign up, sign in, sign out, and access protected routes.",
-    status: "complete",
-    checklistItems: [
-      { label: "Create login and signup routes", isComplete: true },
-      { label: "Persist Supabase browser sessions", isComplete: true },
-      { label: "Redirect signed-out users from protected pages", isComplete: true }
-    ]
-  },
-  {
-    title: "Dashboard",
-    description:
-      "Provide the authenticated dashboard shell and navigation entry points.",
-    status: "complete",
-    checklistItems: [
-      { label: "Create protected dashboard page", isComplete: true },
-      { label: "Add dashboard navigation layout", isComplete: true },
-      { label: "Keep recording and upload flows out of scope", isComplete: true }
-    ]
-  },
-  {
-    title: "Progress Tracker",
-    description:
-      "Track roadmap phases, statuses, checklist completion, and overall progress.",
-    status: "complete",
-    checklistItems: [
-      { label: "Create progress tracker route", isComplete: true },
-      { label: "Persist phase statuses to Supabase", isComplete: true },
-      { label: "Persist checklist updates to Supabase", isComplete: true }
-    ]
-  },
-  {
-    title: "Browser Audio Recording",
-    description:
-      "Capture meeting audio from the browser with clear controls and duration state.",
-    status: "not_started",
-    checklistItems: [
-      { label: "Request microphone permission", isComplete: false },
-      { label: "Support start, pause, resume, and stop controls", isComplete: false },
-      { label: "Pass completed recordings to upload workflow", isComplete: false }
-    ]
-  },
-  {
-    title: "Audio Upload",
-    description:
-      "Upload meeting audio files and show progress as files move into storage.",
-    status: "not_started",
-    checklistItems: [
-      { label: "Validate file type and size", isComplete: false },
-      { label: "Show upload progress and errors", isComplete: false },
-      { label: "Create attachment records for uploaded audio", isComplete: false }
-    ]
-  },
-  {
-    title: "AI Transcription",
-    description:
-      "Turn stored audio into timestamped transcript segments for review.",
-    status: "not_started",
-    checklistItems: [
-      { label: "Submit audio to transcription workflow", isComplete: false },
-      { label: "Store timestamped transcript segments", isComplete: false },
-      { label: "Surface transcription progress and failures", isComplete: false }
-    ]
-  }
 ];
 
 function getStatusClasses(status: PhaseStatus) {
@@ -187,12 +93,15 @@ export function ProgressTracker() {
 
   const seedDefaultProgress = useCallback(async (userId: string) => {
     const supabase = createBrowserSupabaseClient();
+    const defaultPhases = buildProgressTrackerSeed();
     const phaseRows = defaultPhases.map((phase, index) => ({
       owner_id: userId,
       title: phase.title,
       description: phase.description,
       status: phase.status,
-      position: index + 1
+      position: index + 1,
+      created_at: phase.createdAt,
+      updated_at: phase.createdAt
     }));
 
     const { data: insertedPhases, error: phaseError } = await supabase
@@ -214,7 +123,9 @@ export function ProgressTracker() {
         phase_id: phase.id,
         label: item.label,
         is_complete: item.isComplete,
-        position: index + 1
+        position: index + 1,
+        created_at: phase.created_at,
+        updated_at: phase.created_at
       }));
     });
 
