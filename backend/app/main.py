@@ -216,8 +216,8 @@ MEETING_CASCADE_TABLES = (
 )
 MEETING_DETACHED_TABLES = ("audit_logs",)
 MAX_SAME_SPEAKER_PAUSE_MS = 1500
-MAX_MERGED_TRANSCRIPT_CHARACTERS = 1500
-MAX_MERGED_TRANSCRIPT_DURATION_MS = 60000
+MAX_MERGED_TRANSCRIPT_CHARACTERS = 1000
+MAX_MERGED_TRANSCRIPT_DURATION_MS = 45000
 UNKNOWN_SPEAKER_LABEL = "Unknown Speaker"
 
 
@@ -325,12 +325,25 @@ def _normalize_transcript_spacing(value: Any) -> str | None:
 
 
 def _join_transcript_tokens(left: Any, right: Any) -> str | None:
-    combined = " ".join(value for value in (_coerce_optional_text(left), _coerce_optional_text(right)) if value)
+    left_text = _coerce_optional_text(left)
+    right_text = _coerce_optional_text(right)
+    if (
+        left_text
+        and right_text in {",", ".", ";", ":", "!", "?"}
+        and left_text.endswith(right_text)
+    ):
+        right_text = None
+    combined = " ".join(value for value in (left_text, right_text) if value)
     if not combined:
         return None
     combined = re.sub(r"\s+([,.;:!?%\)\]\}])", r"\1", combined)
     combined = re.sub(r"([\(\[\{])\s+", r"\1", combined)
-    combined = re.sub(r"\b(\w+)\s+(['’](?:s|t|re|ve|ll|d|m))\b", r"\1\2", combined, flags=re.IGNORECASE)
+    combined = re.sub(
+        r"\b(\w+)\s+(['\u2019](?:s|t|re|ve|ll|d|m))\b",
+        r"\1\2",
+        combined,
+        flags=re.IGNORECASE,
+    )
     return " ".join(combined.split())
 
 
@@ -349,9 +362,13 @@ def _merge_adjacent_speaker_segments(
     maximum_pause_ms: int = MAX_SAME_SPEAKER_PAUSE_MS,
     maximum_characters: int = MAX_MERGED_TRANSCRIPT_CHARACTERS,
     maximum_duration_ms: int = MAX_MERGED_TRANSCRIPT_DURATION_MS,
+    diagnostics: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     merged_rows: list[dict[str, Any]] = []
     confidence_values: list[list[float]] = []
+    split_by_pause = 0
+    split_by_size_limit = 0
+    speaker_transitions = 0
 
     for row in rows:
         candidate = dict(row)
@@ -384,24 +401,37 @@ def _merge_adjacent_speaker_segments(
                 value is None or len(value) <= maximum_characters
                 for value in joined_values.values()
             )
-            can_merge = (
+            same_speaker = (
                 current_label == candidate_label
+                and current.get("provider_speaker_id")
+                == candidate.get("provider_speaker_id")
+            )
+            within_duration_limit = (
+                int(candidate.get("end_ms") or 0)
+                - int(current.get("start_ms") or 0)
+                <= maximum_duration_ms
+            )
+            can_merge = (
+                same_speaker
                 and (
                     current_label is not None
                     or not current.get("diarization_available")
                     and not candidate.get("diarization_available")
                 )
-                and current.get("provider_speaker_id") == candidate.get("provider_speaker_id")
-                and 0 <= pause_ms < maximum_pause_ms
+                and pause_ms < maximum_pause_ms
                 and current.get("transcript_kind") == candidate.get("transcript_kind")
                 and within_character_limit
-                and int(candidate.get("end_ms") or 0) - int(current.get("start_ms") or 0)
-                <= maximum_duration_ms
+                and within_duration_limit
+                and not current.get("diarization_ambiguous")
+                and not candidate.get("diarization_ambiguous")
             )
 
             if can_merge:
                 current.update(joined_values)
-                current["end_ms"] = candidate["end_ms"]
+                current["end_ms"] = max(
+                    int(current.get("end_ms") or 0),
+                    int(candidate.get("end_ms") or 0),
+                )
                 confidence_values[-1].extend(candidate_confidences)
                 current["confidence"] = (
                     sum(confidence_values[-1]) / len(confidence_values[-1])
@@ -410,11 +440,44 @@ def _merge_adjacent_speaker_segments(
                 )
                 continue
 
+            if same_speaker and pause_ms >= maximum_pause_ms:
+                split_by_pause += 1
+            elif same_speaker and (
+                not within_character_limit or not within_duration_limit
+            ):
+                split_by_size_limit += 1
+            elif current.get("provider_speaker_id") != candidate.get(
+                "provider_speaker_id"
+            ):
+                speaker_transitions += 1
+
         merged_rows.append(candidate)
         confidence_values.append(candidate_confidences)
 
     for index, row in enumerate(merged_rows):
         row["segment_index"] = index
+
+    if diagnostics is not None:
+        durations = [
+            max(0, int(row.get("end_ms") or 0) - int(row.get("start_ms") or 0))
+            for row in merged_rows
+        ]
+        diagnostics.update(
+            {
+                "input_word_count": len(rows),
+                "aligned_word_count": len(rows),
+                "final_transcript_row_count": len(merged_rows),
+                "average_words_per_row": (
+                    round(len(rows) / len(merged_rows), 2) if merged_rows else 0
+                ),
+                "average_row_duration_ms": (
+                    round(sum(durations) / len(durations)) if durations else 0
+                ),
+                "speaker_transition_count": speaker_transitions,
+                "rows_split_by_pause": split_by_pause,
+                "rows_split_by_size_limit": split_by_size_limit,
+            }
+        )
 
     return merged_rows
 
@@ -1770,7 +1833,13 @@ async def _run_transcribe_meeting_job(
         )
         if diarized_turns and word_rows:
             aligned_word_rows = rows
-        rows = _merge_adjacent_speaker_segments(rows)
+        grouping_diagnostics: dict[str, Any] = {}
+        rows = _merge_adjacent_speaker_segments(
+            rows,
+            diagnostics=grouping_diagnostics,
+        )
+        grouping_diagnostics["input_word_count"] = len(word_rows)
+        grouping_diagnostics["aligned_word_count"] = len(aligned_word_rows)
         unknown_row_count = sum(not row.get("speaker_label") for row in rows)
         logger.info(
             "Transcript diarization alignment completed",
@@ -1793,6 +1862,7 @@ async def _run_transcribe_meeting_job(
                     [row.get("start_ms"), row.get("end_ms"), row.get("speaker_label") or "Unknown Speaker"]
                     for row in rows
                 ],
+                **grouping_diagnostics,
             },
         )
         if settings.environment.casefold() != "production":

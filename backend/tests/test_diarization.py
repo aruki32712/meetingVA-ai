@@ -326,11 +326,128 @@ def test_recurring_speaker_creates_separate_turn_and_reuses_participant() -> Non
 
 
 def test_word_grouping_preserves_punctuation_and_contractions() -> None:
-    words = [_row(i, i * 100, (i + 1) * 100, text) for i, text in enumerate(("Hello", ",", "I", "'m", "ready", "."))]
+    words = [_row(i, i * 100, (i + 1) * 100, text) for i, text in enumerate(("Hello", ",", "I", "'m", "ready.", "."))]
     for word in words:
         word["speaker_label"] = "deepgram:0"
         word["provider_speaker_id"] = "0"
     assert _merge_adjacent_speaker_segments(words)[0]["text"] == "Hello, I'm ready."
+
+
+def _aligned_word(
+    index: int,
+    *,
+    speaker: str,
+    start_ms: int,
+    end_ms: int,
+    text: str | None = None,
+) -> dict:
+    row = _row(index, start_ms, end_ms, text or f"word{index}")
+    row.update(
+        {
+            "speaker_label": f"deepgram:{speaker}",
+            "provider_speaker_id": speaker,
+            "diarization_available": True,
+            "diarization_ambiguous": False,
+        }
+    )
+    return row
+
+
+def test_one_hundred_overlapping_words_become_one_readable_turn() -> None:
+    words = [
+        _aligned_word(
+            index,
+            speaker="0",
+            start_ms=index * 400,
+            end_ms=index * 400 + 425,
+        )
+        for index in range(100)
+    ]
+    rows = _merge_adjacent_speaker_segments(words)
+    assert len(rows) == 1
+    assert rows[0]["start_ms"] == 0
+    assert rows[0]["end_ms"] == 40025
+    assert rows[0]["text"].split() == [word["text"] for word in words]
+
+
+def test_short_pause_merges_but_long_pause_splits_same_speaker() -> None:
+    words = [
+        _aligned_word(0, speaker="0", start_ms=0, end_ms=500, text="first"),
+        _aligned_word(1, speaker="0", start_ms=1400, end_ms=1800, text="second"),
+        _aligned_word(2, speaker="0", start_ms=3500, end_ms=3900, text="third"),
+    ]
+    diagnostics: dict = {}
+    rows = _merge_adjacent_speaker_segments(words, diagnostics=diagnostics)
+    assert [row["text"] for row in rows] == ["first second", "third"]
+    assert diagnostics["rows_split_by_pause"] == 1
+
+
+def test_speaker_change_starts_new_row_immediately() -> None:
+    words = [
+        _aligned_word(0, speaker="0", start_ms=0, end_ms=500),
+        _aligned_word(1, speaker="1", start_ms=450, end_ms=900),
+    ]
+    rows = _merge_adjacent_speaker_segments(words)
+    assert len(rows) == 2
+    assert [row["provider_speaker_id"] for row in rows] == ["0", "1"]
+
+
+def test_same_speaker_splits_by_duration_and_keeps_sequential_indexes() -> None:
+    words = [
+        _aligned_word(
+            index,
+            speaker="0",
+            start_ms=index * 500,
+            end_ms=index * 500 + 525,
+        )
+        for index in range(120)
+    ]
+    diagnostics: dict = {}
+    rows = _merge_adjacent_speaker_segments(words, diagnostics=diagnostics)
+    assert len(rows) == 2
+    assert [row["segment_index"] for row in rows] == [0, 1]
+    assert diagnostics["rows_split_by_size_limit"] == 1
+    assert " ".join(row["text"] for row in rows).split() == [
+        word["text"] for word in words
+    ]
+
+
+def test_two_minute_word_fixture_rebuilds_200_tokens_into_five_turns() -> None:
+    # The 25 ms token overlap reproduces the production regression where the
+    # former non-negative pause requirement emitted one row per word.
+    speaker_blocks = ["0", "1", "2", "0", "1"]
+    words = [
+        _aligned_word(
+            index,
+            speaker=speaker_blocks[index // 40],
+            start_ms=index * 600,
+            end_ms=index * 600 + 625,
+        )
+        for index in range(200)
+    ]
+    diagnostics: dict = {}
+    legacy_row_count = 1 + sum(
+        int(word["start_ms"]) - int(previous["end_ms"]) < 0
+        for previous, word in zip(words, words[1:])
+    )
+    rows = _merge_adjacent_speaker_segments(words, diagnostics=diagnostics)
+    client = FakeSupabaseClient()
+    attached = _attach_participants_to_transcript_rows(
+        client,
+        meeting_id="meeting-id",
+        rows=rows,
+    )
+    assert len(words) == 200
+    assert legacy_row_count == 200
+    assert len(attached) == 5
+    assert diagnostics["final_transcript_row_count"] == 5
+    assert diagnostics["average_words_per_row"] == 40
+    assert diagnostics["speaker_transition_count"] == 4
+    assert len(client.participants.rows) == 3
+    assert attached[0]["participant_id"] == attached[3]["participant_id"]
+    assert " ".join(row["text"] for row in attached).split() == [
+        word["text"] for word in words
+    ]
 
 
 def test_long_same_speaker_splits_without_changing_identity() -> None:
