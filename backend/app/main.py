@@ -17,7 +17,11 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel, Field, field_validator, model_validator
 
-from app.diarization import align_transcript_rows_to_turns, diarize_audio_safely
+from app.diarization import (
+    align_transcript_rows_to_turns,
+    development_diarization_diagnostics,
+    diarize_audio_safely,
+)
 from app.supabase_client import get_supabase_anon_client, get_supabase_service_client
 from app.settings import get_settings
 
@@ -495,6 +499,41 @@ def _build_transcript_rows(
             "segment_index": 0,
         }
     ]
+
+
+def _build_word_timestamp_rows(
+    meeting_id: str,
+    transcription: dict[str, Any],
+    *,
+    transcript_kind: str = "original",
+) -> list[dict[str, Any]]:
+    words = transcription.get("words")
+    if not isinstance(words, list):
+        return []
+    rows: list[dict[str, Any]] = []
+    for word in words:
+        if not isinstance(word, dict):
+            continue
+        text = _normalize_transcript_spacing(word.get("word") or word.get("text"))
+        if not text:
+            continue
+        start_ms = _coerce_segment_timestamp(word.get("start"))
+        end_ms = _coerce_segment_timestamp(word.get("end"))
+        if end_ms <= start_ms:
+            continue
+        rows.append({
+            "meeting_id": meeting_id,
+            "speaker_label": None,
+            "start_ms": start_ms,
+            "end_ms": end_ms,
+            "text": text,
+            "original_text": text if transcript_kind == "original" else None,
+            "translated_text": text if transcript_kind in {"translated", "both"} else None,
+            "transcript_kind": transcript_kind,
+            "confidence": _segment_confidence(word),
+            "segment_index": len(rows),
+        })
+    return rows
 
 
 def _coerce_text(value: Any) -> str:
@@ -1104,6 +1143,7 @@ def _attach_participants_to_transcript_rows(
 ) -> list[dict[str, Any]]:
     labels: list[str] = []
     label_sources: dict[str, str] = {}
+    label_confidences: dict[str, list[float]] = defaultdict(list)
 
     for row in rows:
         label = _speaker_label_for_row(row)
@@ -1111,6 +1151,9 @@ def _attach_participants_to_transcript_rows(
         if label not in labels:
             labels.append(label)
             label_sources[label] = _speaker_label_source(row)
+        confidence = row.get("diarization_confidence")
+        if isinstance(confidence, (int, float)) and not isinstance(confidence, bool):
+            label_confidences[label].append(float(confidence))
 
     if not labels:
         return rows
@@ -1135,11 +1178,14 @@ def _attach_participants_to_transcript_rows(
             "source": "transcript",
             "metadata": {
                 "detection_method": (
-                    "transcription_diarization"
+                    "diarization"
                     if label_sources[label] == "provider_detected"
                     else "no_diarization"
                 ),
                 "speaker_label_source": label_sources[label],
+                "provider": "deepgram" if label.startswith("deepgram:") else None,
+                "provider_speaker_id": label.split(":", 1)[1] if label.startswith("deepgram:") else None,
+                "confidence": (sum(label_confidences[label]) / len(label_confidences[label])) if label_confidences[label] else None,
             },
         }
         for label in labels
@@ -1155,6 +1201,7 @@ def _attach_participants_to_transcript_rows(
         label = _speaker_label_for_row(row)
         row["speaker_label"] = label
         row["participant_id"] = participants_by_label[label]
+        row.pop("diarization_confidence", None)
 
     return rows
 
@@ -1392,7 +1439,7 @@ async def _transcribe_audio_with_openai(
     form_data = {
         "model": settings.openai_transcription_model,
         "response_format": "verbose_json",
-        "timestamp_granularities[]": "segment",
+        "timestamp_granularities[]": ["segment", "word"],
     }
     files = {"file": (filename, audio_bytes, content_type)}
 
@@ -1682,6 +1729,13 @@ async def _run_transcribe_meeting_job(
             filename,
             content_type,
         )
+        word_rows = _build_word_timestamp_rows(
+            meeting_id,
+            transcription,
+            transcript_kind=transcript_kind,
+        )
+        if diarized_turns and word_rows:
+            rows = word_rows
         rows = align_transcript_rows_to_turns(
             rows,
             diarized_turns,
@@ -1689,6 +1743,23 @@ async def _run_transcribe_meeting_job(
             minimum_overlap=settings.diarization_minimum_timestamp_overlap,
         )
         rows = _merge_adjacent_speaker_segments(rows)
+        unknown_row_count = sum(not row.get("speaker_label") for row in rows)
+        logger.info(
+            "Transcript diarization alignment completed",
+            extra={
+                "meeting_id": meeting_id,
+                "openai_word_timestamp_count": len(word_rows),
+                "diarized_turn_count": len(diarized_turns),
+                "aligned_transcript_row_count": len(rows),
+                "unknown_transcript_row_count": unknown_row_count,
+                "aligned_unique_speaker_ids": sorted({str(row["speaker_label"]) for row in rows if row.get("speaker_label")}),
+            },
+        )
+        if settings.environment.casefold() != "production":
+            logger.debug(
+                "Development diarization diagnostics",
+                extra=development_diarization_diagnostics(diarized_turns, rows),
+            )
 
         (
             service_client.table("transcript_segments")
@@ -1707,6 +1778,13 @@ async def _run_transcribe_meeting_job(
             service_client,
             meeting_id=meeting_id,
             rows=rows,
+        )
+        logger.info(
+            "Transcript participants created",
+            extra={
+                "meeting_id": meeting_id,
+                "participant_count": len({row.get("participant_id") for row in rows if row.get("participant_id")}),
+            },
         )
         service_client.table("transcript_segments").insert(rows).execute()
         (

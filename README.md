@@ -95,6 +95,10 @@ Optional speaker diarization values:
 
 - `DIARIZATION_PROVIDER` supports `none` (default) and `deepgram`.
 - `DIARIZATION_API_KEY` is required when the provider is `deepgram`.
+- `DIARIZATION_MODEL` selects the prerecorded Deepgram model and defaults to
+  `nova-3`.
+- `DIARIZATION_MAXIMUM_TURN_GAP_MS` controls when adjacent words from the same
+  provider speaker are combined and defaults to `750`.
 - `DIARIZATION_MINIMUM_CONFIDENCE` defaults to `0.5`.
 - `DIARIZATION_MINIMUM_TIMESTAMP_OVERLAP` is the minimum fraction of a
   transcript segment that must overlap its best diarized turn and defaults to
@@ -104,8 +108,12 @@ The Render blueprint enables `deepgram` for both services. Configure
 `DIARIZATION_API_KEY` in Render, especially on the worker service that processes
 audio. Worker startup logs report the selected provider and whether credentials
 are present without printing the credential itself. Each transcription job logs
-whether diarization was attempted and the returned turn and unique-speaker
-counts.
+whether diarization was attempted, Deepgram response counts, unique provider
+speaker IDs, timestamp bounds, aligned and unknown transcript rows, and the
+participant count. OpenAI word timestamps split long transcript segments at
+provider turn boundaries. Speaker data is read from
+`results.channels[*].alternatives[*].words[*].speaker`, with
+`results.utterances[*].speaker` as a fallback.
 
 Deepgram diarization runs against the original meeting audio and supplies only
 anonymous, recording-local speaker IDs. It does not identify a person's voice.

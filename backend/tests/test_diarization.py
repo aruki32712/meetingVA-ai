@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import httpx
 
 from app import diarization
 from app.diarization import DiarizedTurn, align_transcript_rows_to_turns
@@ -7,6 +8,7 @@ from app.main import (
     _attach_participants_to_transcript_rows,
     _build_transcript_rows,
     _merge_adjacent_speaker_segments,
+    _build_word_timestamp_rows,
 )
 
 
@@ -216,6 +218,76 @@ def test_deepgram_words_are_collapsed_into_stable_speaker_turns() -> None:
     )
 
     assert turns == [
-        DiarizedTurn("deepgram:0", 0, 800, 0.9),
-        DiarizedTurn("deepgram:1", 800, 1200, 0.9),
+        DiarizedTurn("0", 0, 800, 0.9),
+        DiarizedTurn("1", 800, 1200, 0.9),
     ]
+
+
+def test_deepgram_speaker_zero_is_retained() -> None:
+    turns = diarization._deepgram_turns({"results": {"utterances": [{"speaker": 0, "start": 1.0, "end": 2.0, "confidence": 0.8}]}})
+    assert turns[0].speaker_id == "0"
+    assert turns[0].stable_label == "deepgram:0"
+
+
+def test_timestamp_conversion_occurs_exactly_once() -> None:
+    turns = diarization._deepgram_turns({"results": {"utterances": [{"speaker": 2, "start": 1.25, "end": 2.5}]}})
+    assert (turns[0].start_ms, turns[0].end_ms) == (1250, 2500)
+
+
+def test_different_speakers_are_never_merged() -> None:
+    turns = diarization._deepgram_turns({"results": {"utterances": [{"speaker": 0, "start": 0, "end": 1}, {"speaker": 1, "start": 1, "end": 2}]}})
+    assert [turn.speaker_id for turn in turns] == ["0", "1"]
+
+
+def test_word_timestamps_split_long_openai_segment_by_real_boundaries() -> None:
+    rows = _build_word_timestamp_rows("meeting-id", {"words": [
+        {"word": "Hello", "start": 0.0, "end": 0.5},
+        {"word": "there", "start": 0.5, "end": 1.0},
+        {"word": "Bonjour", "start": 1.0, "end": 1.5},
+    ]})
+    aligned = _merge_adjacent_speaker_segments(_align(rows, [
+        DiarizedTurn("0", 0, 1000, 0.9), DiarizedTurn("1", 1000, 1500, 0.9)
+    ]))
+    assert [(row["speaker_label"], row["text"]) for row in aligned] == [
+        ("deepgram:0", "Hello there"), ("deepgram:1", "Bonjour")
+    ]
+    assert [row["segment_index"] for row in aligned] == [0, 1]
+    assert [row["original_text"] for row in aligned] == ["Hello there", "Bonjour"]
+
+
+def test_five_speaker_fixture_creates_five_stable_participants() -> None:
+    payload = {"results": {"channels": [{"alternatives": [{"words": [
+        {"word": f"word-{speaker}", "speaker": speaker, "start": speaker, "end": speaker + 0.8, "speaker_confidence": 0.95}
+        for speaker in range(5)
+    ]}]}]}}
+    turns = diarization._deepgram_turns(payload)
+    rows = [_row(index, index * 1000, index * 1000 + 800, f"word-{index}") for index in range(5)]
+    client = FakeSupabaseClient()
+    attached = _attach_participants_to_transcript_rows(client, meeting_id="meeting-id", rows=_align(rows, turns))
+    assert {turn.speaker_id for turn in turns} == {"0", "1", "2", "3", "4"}
+    assert len(client.participants.rows) == 5
+    assert len({row["participant_id"] for row in attached}) == 5
+    assert {row["metadata"]["provider_speaker_id"] for row in client.participants.rows} == {"0", "1", "2", "3", "4"}
+
+
+def test_one_provider_speaker_is_reported_honestly() -> None:
+    turns = diarization._deepgram_turns({"results": {"utterances": [{"speaker": 0, "start": 0, "end": 1}, {"speaker": 0, "start": 1.1, "end": 2}]}})
+    assert len(turns) == 1
+    assert {turn.speaker_id for turn in turns} == {"0"}
+
+
+def test_deepgram_request_enables_diarization_and_sends_original_audio(monkeypatch) -> None:
+    observed: dict[str, object] = {}
+    async def handler(request: httpx.Request) -> httpx.Response:
+        observed["query"] = dict(request.url.params)
+        observed["content_type"] = request.headers.get("content-type")
+        observed["body"] = await request.aread()
+        return httpx.Response(200, json={"results": {"channels": [{"alternatives": [{"words": [{"speaker": 0, "start": 0, "end": 1}]}]}]}})
+    real_client = httpx.AsyncClient
+    monkeypatch.setattr(diarization.httpx, "AsyncClient", lambda *args, **kwargs: real_client(*args, transport=httpx.MockTransport(handler), **kwargs))
+    monkeypatch.setattr(diarization, "get_settings", lambda: type("Settings", (), {"diarization_model": "nova-3", "diarization_maximum_turn_gap_ms": 750})())
+    turns = asyncio.run(diarization._diarize_with_deepgram(audio_bytes=b"original-audio", filename="recording.webm", content_type="audio/webm", api_key="secret"))
+    assert observed["query"] == {"diarize": "true", "utterances": "true", "punctuate": "true", "smart_format": "true", "model": "nova-3"}
+    assert observed["content_type"] == "audio/webm"
+    assert observed["body"] == b"original-audio"
+    assert turns[0].speaker_id == "0"

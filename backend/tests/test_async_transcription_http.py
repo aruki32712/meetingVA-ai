@@ -44,6 +44,8 @@ def test_transcription_request_uses_async_compatible_multipart(monkeypatch):
     assert b'name="model"' in body
     assert main.settings.openai_transcription_model.encode() in body
     assert b'name="timestamp_granularities[]"' in body
+    assert body.count(b'name="timestamp_granularities[]"') == 2
+    assert b"word" in body
     assert b'name="file"; filename="recording.webm"' in body
 
 

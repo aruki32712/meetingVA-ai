@@ -43,6 +43,10 @@ services:
         value: deepgram
       - key: DIARIZATION_API_KEY
         sync: false
+      - key: DIARIZATION_MODEL
+        value: nova-3
+      - key: DIARIZATION_MAXIMUM_TURN_GAP_MS
+        value: "750"
       - key: DIARIZATION_MINIMUM_CONFIDENCE
         value: "0.5"
       - key: DIARIZATION_MINIMUM_TIMESTAMP_OVERLAP
@@ -106,6 +110,10 @@ services:
         value: deepgram
       - key: DIARIZATION_API_KEY
         sync: false
+      - key: DIARIZATION_MODEL
+        value: nova-3
+      - key: DIARIZATION_MAXIMUM_TURN_GAP_MS
+        value: "750"
       - key: DIARIZATION_MINIMUM_CONFIDENCE
         value: "0.5"
       - key: DIARIZATION_MINIMUM_TIMESTAMP_OVERLAP

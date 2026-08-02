@@ -15,6 +15,11 @@ class DiarizedTurn:
     start_ms: int
     end_ms: int
     confidence: float | None = None
+    provider: str = "deepgram"
+
+    @property
+    def stable_label(self) -> str:
+        return self.speaker_id if ":" in self.speaker_id else f"{self.provider}:{self.speaker_id}"
 
 
 def _milliseconds(value: Any) -> int:
@@ -28,43 +33,59 @@ def _optional_confidence(value: Any) -> float | None:
     return float(value)
 
 
-def _deepgram_turns(payload: dict[str, Any]) -> list[DiarizedTurn]:
-    channels = payload.get("results", {}).get("channels", [])
-    alternatives = channels[0].get("alternatives", []) if channels else []
-    words = alternatives[0].get("words", []) if alternatives else []
+def _valid_turn(speaker: Any, start: Any, end: Any, confidence: Any) -> DiarizedTurn | None:
+    if speaker is None or isinstance(speaker, bool):
+        return None
+    try:
+        start_ms = _milliseconds(start)
+        end_ms = _milliseconds(end)
+    except (TypeError, ValueError):
+        return None
+    if end_ms <= start_ms:
+        return None
+    return DiarizedTurn(str(speaker), start_ms, end_ms, _optional_confidence(confidence))
+
+
+def _deepgram_units(payload: dict[str, Any]) -> tuple[list[DiarizedTurn], str]:
+    results = payload.get("results", {})
+    utterances = results.get("utterances", [])
+    units = [
+        turn for item in utterances if isinstance(item, dict)
+        if (turn := _valid_turn(item.get("speaker"), item.get("start"), item.get("end"), item.get("confidence"))) is not None
+    ]
+    channels = results.get("channels", [])
+    words: list[Any] = []
+    for channel in channels if isinstance(channels, list) else []:
+        alternatives = channel.get("alternatives", []) if isinstance(channel, dict) else []
+        if alternatives and isinstance(alternatives[0], dict):
+            words.extend(alternatives[0].get("words", []) or [])
+    word_units = [
+        turn for word in words if isinstance(word, dict)
+        if (turn := _valid_turn(word.get("speaker"), word.get("start"), word.get("end"), word.get("speaker_confidence"))) is not None
+    ]
+    return (word_units, "results.channels[*].alternatives[*].words[*].speaker") if word_units else (units, "results.utterances[*].speaker")
+
+
+def _deepgram_turns(payload: dict[str, Any], *, maximum_gap_ms: int = 750) -> list[DiarizedTurn]:
+    units, _ = _deepgram_units(payload)
     turns: list[DiarizedTurn] = []
     confidence_values: list[list[float]] = []
 
-    for word in words:
-        if not isinstance(word, dict) or word.get("speaker") is None:
-            continue
-
-        speaker_id = f"deepgram:{word['speaker']}"
-        start_ms = _milliseconds(word.get("start", 0))
-        end_ms = max(start_ms, _milliseconds(word.get("end", 0)))
-        confidence = _optional_confidence(word.get("speaker_confidence"))
-
-        if turns and turns[-1].speaker_id == speaker_id:
+    for unit in sorted(units, key=lambda turn: (turn.start_ms, turn.end_ms)):
+        if turns and turns[-1].speaker_id == unit.speaker_id and unit.start_ms - turns[-1].end_ms <= maximum_gap_ms:
             values = confidence_values[-1]
-            if confidence is not None:
-                values.append(confidence)
+            if unit.confidence is not None:
+                values.append(unit.confidence)
             turns[-1] = DiarizedTurn(
-                speaker_id=speaker_id,
+                speaker_id=unit.speaker_id,
                 start_ms=turns[-1].start_ms,
-                end_ms=end_ms,
+                end_ms=max(turns[-1].end_ms, unit.end_ms),
                 confidence=sum(values) / len(values) if values else None,
             )
             continue
 
-        confidence_values.append([confidence] if confidence is not None else [])
-        turns.append(
-            DiarizedTurn(
-                speaker_id=speaker_id,
-                start_ms=start_ms,
-                end_ms=end_ms,
-                confidence=confidence,
-            )
-        )
+        confidence_values.append([unit.confidence] if unit.confidence is not None else [])
+        turns.append(unit)
 
     return turns
 
@@ -79,10 +100,13 @@ async def _diarize_with_deepgram(
     if not api_key:
         raise RuntimeError("Deepgram diarization API key is not configured")
 
+    settings = get_settings()
+    model = settings.diarization_model
+    logger.info("Sending audio to Deepgram diarization", extra={"audio_filename": filename, "audio_content_type": content_type, "audio_byte_count": len(audio_bytes), "diarization_model": model, "diarization_requested": True})
     async with httpx.AsyncClient(timeout=180) as client:
         response = await client.post(
             "https://api.deepgram.com/v1/listen",
-            params={"diarize_model": "latest"},
+            params={"diarize": "true", "utterances": "true", "punctuate": "true", "smart_format": "true", "model": model},
             headers={
                 "Authorization": f"Token {api_key}",
                 "Content-Type": content_type,
@@ -90,12 +114,22 @@ async def _diarize_with_deepgram(
             content=audio_bytes,
         )
 
+    logger.info("Deepgram diarization response received", extra={"deepgram_http_status": response.status_code, "diarization_model": model})
     if response.status_code >= 400:
         raise RuntimeError(
             f"Deepgram diarization request failed with status {response.status_code}"
         )
 
-    return _deepgram_turns(response.json())
+    payload = response.json()
+    turns = _deepgram_turns(payload, maximum_gap_ms=settings.diarization_maximum_turn_gap_ms)
+    units, response_path = _deepgram_units(payload)
+    results = payload.get("results", {})
+    channels = results.get("channels", []) or []
+    paragraphs = sum(len(((channel.get("alternatives") or [{}])[0].get("paragraphs") or {}).get("paragraphs", []) or []) for channel in channels if isinstance(channel, dict))
+    utterances = results.get("utterances", []) or []
+    words = sum(len((channel.get("alternatives") or [{}])[0].get("words", []) or []) for channel in channels if isinstance(channel, dict))
+    logger.info("Deepgram diarization payload parsed", extra={"deepgram_channel_count": len(channels), "deepgram_paragraph_count": paragraphs, "deepgram_utterance_count": len(utterances), "deepgram_word_count": words, "diarized_turn_count": len(turns), "diarized_unit_count": len(units), "diarized_unique_speaker_ids": sorted({turn.speaker_id for turn in turns}), "diarized_speaker_count": len({turn.speaker_id for turn in turns}), "diarized_first_timestamp_ms": turns[0].start_ms if turns else None, "diarized_last_timestamp_ms": turns[-1].end_ms if turns else None, "deepgram_speaker_response_path": response_path})
+    return turns
 
 
 def diarization_status() -> dict[str, str | bool]:
@@ -155,7 +189,7 @@ async def diarize_audio_safely(
 
     logger.info(
         "Attempting hosted speaker diarization",
-        extra={**status, "diarization_attempted": True, "audio_filename": filename},
+        extra={**status, "diarization_attempted": True, "audio_filename": filename, "audio_content_type": content_type, "audio_byte_count": len(audio_bytes)},
     )
 
     try:
@@ -166,9 +200,8 @@ async def diarize_audio_safely(
                 **status,
                 "diarization_attempted": True,
                 "diarized_turn_count": len(turns),
-                "diarized_speaker_count": len(
-                    {turn.speaker_id for turn in turns}
-                ),
+                "diarized_speaker_count": len({turn.speaker_id for turn in turns}),
+                "diarized_unique_speaker_ids": sorted({turn.speaker_id for turn in turns}),
             },
         )
         return turns
@@ -242,7 +275,8 @@ def _split_row_at_diarized_turns(
         split_row = dict(row)
         split_row.update(
             {
-                "speaker_label": turn.speaker_id,
+                "speaker_label": turn.stable_label,
+                "diarization_confidence": turn.confidence,
                 "start_ms": start_ms,
                 "end_ms": end_ms,
                 "text": split_values["text"][index] or "",
@@ -290,7 +324,7 @@ def align_transcript_rows_to_turns(
             or candidate[1].confidence >= minimum_confidence
         ]
         distinct_speakers = {
-            turn.speaker_id for _, turn in eligible_candidates
+            turn.stable_label for _, turn in eligible_candidates
         }
         covered_duration = sum(overlap for overlap, _ in eligible_candidates)
 
@@ -309,7 +343,7 @@ def align_transcript_rows_to_turns(
             len(candidates) > 1
             and candidates[1][0] == best_overlap
             and best_turn is not None
-            and candidates[1][1].speaker_id != best_turn.speaker_id
+            and candidates[1][1].stable_label != best_turn.stable_label
         )
         sufficient_overlap = best_overlap / duration_ms >= minimum_overlap
         sufficient_confidence = (
@@ -321,12 +355,15 @@ def align_transcript_rows_to_turns(
         )
 
         aligned["speaker_label"] = (
-            best_turn.speaker_id
+            best_turn.stable_label
             if best_turn is not None
             and not ambiguous
             and sufficient_overlap
             and sufficient_confidence
             else None
+        )
+        aligned["diarization_confidence"] = (
+            best_turn.confidence if aligned["speaker_label"] else None
         )
         aligned_rows.append(aligned)
 
@@ -334,3 +371,28 @@ def align_transcript_rows_to_turns(
         row["segment_index"] = index
 
     return aligned_rows
+
+
+def development_diarization_diagnostics(
+    turns: list[DiarizedTurn],
+    rows: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Return abbreviated diagnostics for development logs and test utilities."""
+    return {
+        "provider_turns": [
+            [turn.start_ms, turn.end_ms, turn.speaker_id] for turn in turns
+        ],
+        "aligned_transcript_turns": [
+            [
+                row.get("start_ms"),
+                row.get("end_ms"),
+                row.get("speaker_label") or "Unknown Speaker",
+                (_normalize_diagnostic_text(row.get("text")))[:48],
+            ]
+            for row in rows
+        ],
+    }
+
+
+def _normalize_diagnostic_text(value: Any) -> str:
+    return " ".join(str(value or "").split())
