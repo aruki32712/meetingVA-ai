@@ -12,6 +12,7 @@ from app.main import (
     _normalize_language,
     _require_bearer_token,
     _transcript_kind,
+    _translation_status,
     _validate_uuid,
     ai_rate_limit_events,
 )
@@ -443,4 +444,39 @@ def test_transcript_kind_tracks_translation_state() -> None:
             translated=False,
         )
         == "original"
+    )
+
+
+def test_translation_status_tracks_request_and_language_state() -> None:
+    assert (
+        _translation_status(
+            detected_language="spanish",
+            translate_to_english=False,
+            translated=False,
+        )
+        == "not_requested"
+    )
+    assert (
+        _translation_status(
+            detected_language="english",
+            translate_to_english=True,
+            translated=False,
+        )
+        == "not_needed"
+    )
+    assert (
+        _translation_status(
+            detected_language="spanish",
+            translate_to_english=True,
+            translated=True,
+        )
+        == "translated"
+    )
+    assert (
+        _translation_status(
+            detected_language="spanish",
+            translate_to_english=True,
+            translated=False,
+        )
+        == "failed"
     )

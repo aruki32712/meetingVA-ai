@@ -18,6 +18,11 @@ type MeetingStatus =
 
 type AttachmentKind = "audio" | "transcript" | "document" | "image" | "other";
 type TranscriptKind = "original" | "translated" | "both";
+type TranslationStatus =
+  | "not_requested"
+  | "not_needed"
+  | "translated"
+  | "failed";
 type ProcessingJobType = "transcription" | "analysis";
 type ProcessingJobStatus =
   | "queued"
@@ -47,6 +52,14 @@ type Database = {
           duration_seconds: number | null;
           summary: string | null;
           brief: string | null;
+          summary_translated: string | null;
+          brief_translated: string | null;
+          detected_language: string | null;
+          transcript_language: string | null;
+          translation_language: string | null;
+          translate_to_english: boolean;
+          transcript_kind: TranscriptKind;
+          translation_status: TranslationStatus;
           created_at: string;
           updated_at: string;
         };
@@ -64,6 +77,14 @@ type Database = {
           duration_seconds?: number | null;
           summary?: string | null;
           brief?: string | null;
+          summary_translated?: string | null;
+          brief_translated?: string | null;
+          detected_language?: string | null;
+          transcript_language?: string | null;
+          translation_language?: string | null;
+          translate_to_english?: boolean;
+          transcript_kind?: TranscriptKind;
+          translation_status?: TranslationStatus;
           created_at?: string;
           updated_at?: string;
         };
@@ -81,6 +102,14 @@ type Database = {
           duration_seconds?: number | null;
           summary?: string | null;
           brief?: string | null;
+          summary_translated?: string | null;
+          brief_translated?: string | null;
+          detected_language?: string | null;
+          transcript_language?: string | null;
+          translation_language?: string | null;
+          translate_to_english?: boolean;
+          transcript_kind?: TranscriptKind;
+          translation_status?: TranslationStatus;
           created_at?: string;
           updated_at?: string;
         };
@@ -346,6 +375,8 @@ type Database = {
           assignee_participant_id: string | null;
           title: string;
           description: string | null;
+          translated_title: string | null;
+          translated_description: string | null;
           status: "open" | "in_progress" | "completed" | "cancelled";
           due_at: string | null;
           source_segment_id: string | null;
@@ -358,6 +389,8 @@ type Database = {
           assignee_participant_id?: string | null;
           title: string;
           description?: string | null;
+          translated_title?: string | null;
+          translated_description?: string | null;
           status?: "open" | "in_progress" | "completed" | "cancelled";
           due_at?: string | null;
           source_segment_id?: string | null;
@@ -370,6 +403,8 @@ type Database = {
           assignee_participant_id?: string | null;
           title?: string;
           description?: string | null;
+          translated_title?: string | null;
+          translated_description?: string | null;
           status?: "open" | "in_progress" | "completed" | "cancelled";
           due_at?: string | null;
           source_segment_id?: string | null;
@@ -392,6 +427,8 @@ type Database = {
           meeting_id: string;
           title: string;
           description: string | null;
+          translated_title: string | null;
+          translated_description: string | null;
           source_segment_id: string | null;
           created_at: string;
         };
@@ -400,6 +437,8 @@ type Database = {
           meeting_id: string;
           title: string;
           description?: string | null;
+          translated_title?: string | null;
+          translated_description?: string | null;
           source_segment_id?: string | null;
           created_at?: string;
         };
@@ -408,6 +447,8 @@ type Database = {
           meeting_id?: string;
           title?: string;
           description?: string | null;
+          translated_title?: string | null;
+          translated_description?: string | null;
           source_segment_id?: string | null;
           created_at?: string;
         };
@@ -428,6 +469,8 @@ type Database = {
           participant_id: string | null;
           question: string;
           answer: string | null;
+          translated_question: string | null;
+          translated_answer: string | null;
           status: "open" | "answered" | "deferred";
           source_segment_id: string | null;
           created_at: string;
@@ -439,6 +482,8 @@ type Database = {
           participant_id?: string | null;
           question: string;
           answer?: string | null;
+          translated_question?: string | null;
+          translated_answer?: string | null;
           status?: "open" | "answered" | "deferred";
           source_segment_id?: string | null;
           created_at?: string;
@@ -450,6 +495,8 @@ type Database = {
           participant_id?: string | null;
           question?: string;
           answer?: string | null;
+          translated_question?: string | null;
+          translated_answer?: string | null;
           status?: "open" | "answered" | "deferred";
           source_segment_id?: string | null;
           created_at?: string;

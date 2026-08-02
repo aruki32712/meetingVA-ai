@@ -7,7 +7,7 @@ import time
 from collections import defaultdict, deque
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 from uuid import UUID, uuid4
 
 import httpx
@@ -123,6 +123,21 @@ class AssignTranscriptSegmentsRequest(BaseModel):
 
 class TranscribeMeetingRequest(BaseModel):
     translate_to_english: bool = False
+
+
+TranslationSection = Literal[
+    "transcript", "summary", "brief", "action_items", "decisions", "questions"
+]
+
+
+class TranslateMeetingRequest(BaseModel):
+    target_language: str = Field(default="english", min_length=2, max_length=40)
+    sections: list[TranslationSection] = Field(min_length=1)
+
+    @field_validator("target_language")
+    @classmethod
+    def normalize_target_language(cls, value: str) -> str:
+        return value.strip().lower()
 
 
 class JobResponse(BaseModel):
@@ -1257,6 +1272,24 @@ def _transcript_kind(
     return "original"
 
 
+def _translation_status(
+    *,
+    detected_language: str | None,
+    translate_to_english: bool,
+    translated: bool,
+) -> str:
+    if not translate_to_english:
+        return "not_requested"
+
+    if translated:
+        return "translated"
+
+    if _is_english_language(detected_language):
+        return "not_needed"
+
+    return "failed"
+
+
 def _openai_error_details(
     exc: Exception,
 ) -> tuple[int | None, str | None, str | None, str, str | None]:
@@ -1416,6 +1449,7 @@ async def _analyze_transcript_with_openai(
     *,
     meeting_title: str,
     transcript: str,
+    transcript_language: str | None = None,
 ) -> dict[str, Any]:
     openai_api_key = _require_configured(settings.openai_api_key, "OPENAI_API_KEY")
 
@@ -1434,7 +1468,8 @@ async def _analyze_transcript_with_openai(
                     "specific date; otherwise use null. "
                     "decisions must be an array of objects with title and description. "
                     "open_questions must be an array of objects with question, answer, "
-                    "and status, where status is open, answered, or deferred."
+                    "and status, where status is open, answered, or deferred. "
+                    + _analysis_language_instruction(transcript_language)
                 ),
             },
             {
@@ -1480,6 +1515,48 @@ async def _analyze_transcript_with_openai(
         ) from exc
 
     return _normalize_analysis_payload(parsed)
+
+
+def _analysis_language_instruction(transcript_language: str | None) -> str:
+    return (
+        f"Respond in the transcript language ({transcript_language or 'unknown'}). "
+        "Preserve names and proper nouns. Do not translate unless an explicit "
+        "target language is supplied."
+    )
+
+
+async def _translate_sections_with_openai(
+    *, content: dict[str, Any], target_language: str
+) -> dict[str, Any]:
+    """Translate JSON string values while preserving its structure and identifiers."""
+    openai_api_key = _require_configured(settings.openai_api_key, "OPENAI_API_KEY")
+    payload = {
+        "model": settings.openai_analysis_model,
+        "response_format": {"type": "json_object"},
+        "messages": [
+            {
+                "role": "system",
+                "content": (
+                    f"Translate user-visible JSON string values to {target_language}. "
+                    "Return only valid JSON with exactly the same keys, arrays, IDs, nulls, "
+                    "and structure. Preserve names and proper nouns."
+                ),
+            },
+            {"role": "user", "content": json.dumps(content, ensure_ascii=False)},
+        ],
+    }
+    async with httpx.AsyncClient(timeout=120) as client:
+        response = await client.post(
+            "https://api.openai.com/v1/chat/completions",
+            headers={"Authorization": f"Bearer {openai_api_key}"},
+            json=payload,
+        )
+    if response.status_code >= 400:
+        raise RuntimeError("Translation provider request failed.")
+    try:
+        return json.loads(response.json()["choices"][0]["message"]["content"])
+    except (KeyError, IndexError, TypeError, json.JSONDecodeError) as exc:
+        raise RuntimeError("Translation provider returned an invalid response.") from exc
 
 
 async def _run_transcribe_meeting_job(
@@ -1534,22 +1611,17 @@ async def _run_transcribe_meeting_job(
             content_type=content_type,
         )
         detected_language = _normalize_language(transcription.get("language"))
-        should_translate = translate_to_english and not _is_english_language(
-            detected_language
-        )
+        # Transcription always persists the original language. Translation is a
+        # separate, on-demand operation and must never replace this payload.
         transcript_payload = transcription
         translated = False
-
-        if should_translate:
-            transcript_payload = await _translate_audio_with_openai(
-                audio_bytes=audio_bytes,
-                filename=filename,
-                content_type="application/octet-stream",
-            )
-            translated = True
-
-        transcript_language = "english" if translated else detected_language
-        translation_language = "english" if translated else None
+        transcript_language = detected_language
+        translation_language = None
+        translation_status = _translation_status(
+            detected_language=detected_language,
+            translate_to_english=False,
+            translated=translated,
+        )
         transcript_kind = _transcript_kind(
             detected_language=detected_language,
             translate_to_english=translate_to_english,
@@ -1559,7 +1631,7 @@ async def _run_transcribe_meeting_job(
             meeting_id=meeting_id,
             transcription=transcript_payload,
             duration_seconds=meeting.get("duration_seconds"),
-            original_transcription=transcription,
+            original_transcription=None,
             transcript_kind=transcript_kind,
             merge_adjacent=False,
         )
@@ -1602,8 +1674,9 @@ async def _run_transcribe_meeting_job(
                     "detected_language": detected_language,
                     "transcript_language": transcript_language,
                     "translation_language": translation_language,
+                    "translation_status": translation_status,
                     "transcript_kind": transcript_kind,
-                    "translate_to_english": translate_to_english,
+                    "translate_to_english": False,
                 }
             )
             .eq("id", meeting_id)
@@ -1634,6 +1707,7 @@ async def _run_transcribe_meeting_job(
         "detected_language": detected_language,
         "transcript_language": transcript_language,
         "translation_language": translation_language,
+        "translation_status": translation_status,
         "transcript_kind": transcript_kind,
     }
 
@@ -1654,7 +1728,7 @@ async def _run_analyze_meeting_job(
 
     meeting_response = (
         service_client.table("meetings")
-        .select("id,title")
+        .select("id,title,transcript_language,detected_language")
         .eq("id", meeting_id)
         .limit(1)
         .execute()
@@ -1681,6 +1755,9 @@ async def _run_analyze_meeting_job(
         analysis = await _analyze_transcript_with_openai(
             meeting_title=meeting.get("title") or "Untitled meeting",
             transcript=transcript,
+            transcript_language=(
+                meeting.get("transcript_language") or meeting.get("detected_language")
+            ),
         )
         rows = _build_analysis_rows(meeting_id, analysis)
 
@@ -1834,6 +1911,96 @@ async def analyze_meeting(
         "job_id": job_id,
         "processing_status": "queued",
     }
+
+
+@app.post("/v1/meetings/{meeting_id}/translate", tags=["meetings"])
+async def translate_meeting_sections(
+    meeting_id: str,
+    payload: TranslateMeetingRequest,
+    authorization: str | None = Header(default=None),
+) -> dict[str, Any]:
+    meeting_id = _validate_uuid(meeting_id, "meeting_id")
+    token = _require_bearer_token(authorization)
+    client = get_supabase_service_client()
+    user_id = _require_user_id(token)
+    _require_owned_meeting(client, meeting_id, user_id)
+    sections = list(dict.fromkeys(payload.sections))
+    target = _normalize_language(payload.target_language) or payload.target_language
+    meeting_rows = (
+        client.table("meetings")
+        .select("id,summary,brief,summary_translated,brief_translated,translation_language")
+        .eq("id", meeting_id).limit(1).execute().data or []
+    )
+    meeting = meeting_rows[0]
+    table_contract = {
+        "action_items": ("id,title,description,translated_title,translated_description", ("title", "description")),
+        "decisions": ("id,title,description,translated_title,translated_description", ("title", "description")),
+        "questions": ("id,question,answer,translated_question,translated_answer", ("question", "answer")),
+        "transcript": ("id,text,original_text,translated_text", ("original_text", "text")),
+    }
+    result: dict[str, Any] = {}
+    source: dict[str, Any] = {}
+    cache_matches = meeting.get("translation_language") == target
+
+    for section in sections:
+        if section in {"summary", "brief"}:
+            translated_key = f"{section}_translated"
+            if cache_matches and meeting.get(translated_key):
+                result[section] = meeting[translated_key]
+            elif meeting.get(section):
+                source[section] = meeting[section]
+            continue
+        columns, original_keys = table_contract[section]
+        table_name = "transcript_segments" if section == "transcript" else section
+        rows = client.table(table_name).select(columns).eq("meeting_id", meeting_id).execute().data or []
+        field_pairs = (
+            (("original_text", "translated_text"), ("text", "translated_text"))
+            if section == "transcript"
+            else (("question", "translated_question"), ("answer", "translated_answer"))
+            if section == "questions"
+            else (("title", "translated_title"), ("description", "translated_description"))
+        )
+        rows_are_cached = all(
+            all(not row.get(original) or row.get(translated) for original, translated in field_pairs)
+            for row in rows
+        )
+        if cache_matches and rows and rows_are_cached:
+            result[section] = rows
+        elif rows:
+            source[section] = [
+                {"id": row["id"], **{key: row.get(key) for key in original_keys}}
+                for row in rows
+            ]
+
+    if source:
+        try:
+            translated = await _translate_sections_with_openai(
+                content=source, target_language=target
+            )
+            for section, value in translated.items():
+                if section in {"summary", "brief"}:
+                    client.table("meetings").update({f"{section}_translated": value}).eq("id", meeting_id).execute()
+                    result[section] = value
+                    continue
+                table_name = "transcript_segments" if section == "transcript" else section
+                for row in value:
+                    row_id = row.pop("id")
+                    if section == "transcript":
+                        values = {"translated_text": row.get("original_text") or row.get("text")}
+                    elif section == "questions":
+                        values = {"translated_question": row.get("question"), "translated_answer": row.get("answer")}
+                    else:
+                        values = {"translated_title": row.get("title"), "translated_description": row.get("description")}
+                    client.table(table_name).update(values).eq("id", row_id).eq("meeting_id", meeting_id).execute()
+                result[section] = value
+            client.table("meetings").update({
+                "translation_language": target, "translation_status": "translated"
+            }).eq("id", meeting_id).execute()
+        except Exception as exc:
+            logger.exception("Optional meeting translation failed", extra={"meeting_id": meeting_id, "sections": sections})
+            raise HTTPException(status_code=502, detail="Unable to translate this content. Please try again.") from exc
+
+    return {"meeting_id": meeting_id, "target_language": target, "sections": result, "cached": not bool(source)}
 
 
 @app.get("/v1/meetings/{meeting_id}/jobs/{job_id}", tags=["meetings"])

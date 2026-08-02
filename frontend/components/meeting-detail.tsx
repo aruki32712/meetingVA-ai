@@ -30,6 +30,11 @@ import {
   shouldShowAnalyzing,
   type AnalysisJobSummary
 } from "./analysis-job-state";
+import {
+  displayedTranscriptText,
+  isEnglishLanguage,
+  type TranslationSection
+} from "./meeting-translation-state";
 
 type MeetingDetailRow = {
   id: string;
@@ -42,9 +47,12 @@ type MeetingDetailRow = {
   status: string;
   summary: string | null;
   brief: string | null;
+  summary_translated: string | null;
+  brief_translated: string | null;
   detected_language: string | null;
   transcript_language: string | null;
   translation_language: string | null;
+  translation_status: "not_requested" | "not_needed" | "translated" | "failed";
   translate_to_english: boolean;
   transcript_kind: "original" | "translated" | "both";
   tags: string[];
@@ -96,6 +104,8 @@ type ActionItem = {
   id: string;
   title: string;
   description: string | null;
+  translated_title: string | null;
+  translated_description: string | null;
   status: string;
   due_at: string | null;
 };
@@ -104,12 +114,16 @@ type Decision = {
   id: string;
   title: string;
   description: string | null;
+  translated_title: string | null;
+  translated_description: string | null;
 };
 
 type Question = {
   id: string;
   question: string;
   answer: string | null;
+  translated_question: string | null;
+  translated_answer: string | null;
   status: string;
 };
 
@@ -361,7 +375,9 @@ export function MeetingDetail({ meetingId }: { meetingId: string }) {
   const [isDeletingMeeting, setIsDeletingMeeting] = useState(false);
   const deleteRequestInFlightRef = useRef(false);
   const [deletionError, setDeletionError] = useState("");
-  const [translateToEnglish, setTranslateToEnglish] = useState(false);
+  const [englishSections, setEnglishSections] = useState<Set<TranslationSection>>(new Set());
+  const [translatingSection, setTranslatingSection] = useState<TranslationSection | null>(null);
+  const [translationError, setTranslationError] = useState("");
   const [error, setError] = useState("");
   const [transcriptionError, setTranscriptionError] = useState("");
   const [analysisError, setAnalysisError] = useState("");
@@ -379,7 +395,7 @@ export function MeetingDetail({ meetingId }: { meetingId: string }) {
     const { data, error: meetingError } = await supabase
       .from("meetings")
       .select(
-        "id,owner_id,title,description,status,scheduled_at,audio_storage_path,duration_seconds,summary,brief,created_at"
+        "id,owner_id,title,description,status,scheduled_at,audio_storage_path,duration_seconds,summary,brief,summary_translated,brief_translated,detected_language,transcript_language,translation_language,translation_status,translate_to_english,transcript_kind,created_at"
       )
       .eq("id", meetingId)
       .eq("owner_id", userData.user.id)
@@ -413,7 +429,7 @@ export function MeetingDetail({ meetingId }: { meetingId: string }) {
 
     const { data: actionItemRows, error: actionItemError } = await supabase
       .from("action_items")
-      .select("id,title,description,status,due_at")
+      .select("id,title,description,translated_title,translated_description,status,due_at")
       .eq("meeting_id", meetingId)
       .order("created_at", { ascending: true });
 
@@ -423,7 +439,7 @@ export function MeetingDetail({ meetingId }: { meetingId: string }) {
 
     const { data: decisionRows, error: decisionError } = await supabase
       .from("decisions")
-      .select("id,title,description")
+      .select("id,title,description,translated_title,translated_description")
       .eq("meeting_id", meetingId)
       .order("created_at", { ascending: true });
 
@@ -433,7 +449,7 @@ export function MeetingDetail({ meetingId }: { meetingId: string }) {
 
     const { data: questionRows, error: questionError } = await supabase
       .from("questions")
-      .select("id,question,answer,status")
+      .select("id,question,answer,translated_question,translated_answer,status")
       .eq("meeting_id", meetingId)
       .order("created_at", { ascending: true });
 
@@ -497,11 +513,6 @@ export function MeetingDetail({ meetingId }: { meetingId: string }) {
     return {
       meeting: {
         ...data,
-        detected_language: null,
-        transcript_language: null,
-        translation_language: null,
-        translate_to_english: false,
-        transcript_kind: "original" as const,
         tags: []
       },
       audioUrl: signedAudioUrl,
@@ -570,7 +581,6 @@ export function MeetingDetail({ meetingId }: { meetingId: string }) {
         ])
       )
     );
-    setTranslateToEnglish(result.meeting.translate_to_english ?? false);
     setActionItems(result.actionItems);
     setDecisions(result.decisions);
     setQuestions(result.questions);
@@ -648,7 +658,6 @@ export function MeetingDetail({ meetingId }: { meetingId: string }) {
               ])
             )
           );
-          setTranslateToEnglish(result.meeting.translate_to_english ?? false);
           setActionItems(result.actionItems);
           setDecisions(result.decisions);
           setQuestions(result.questions);
@@ -922,7 +931,7 @@ export function MeetingDetail({ meetingId }: { meetingId: string }) {
             Authorization: `Bearer ${accessToken}`,
             "Content-Type": "application/json"
           },
-          body: JSON.stringify({ translate_to_english: translateToEnglish })
+          body: JSON.stringify({ translate_to_english: false })
         }
       );
 
@@ -963,6 +972,45 @@ export function MeetingDetail({ meetingId }: { meetingId: string }) {
       setActiveJobType("");
       setIsTranscribing(false);
     }
+  }
+
+  async function toggleTranslation(section: TranslationSection) {
+    if (englishSections.has(section)) {
+      setEnglishSections((current) => {
+        const next = new Set(current);
+        next.delete(section);
+        return next;
+      });
+      return;
+    }
+    setTranslatingSection(section);
+    setTranslationError("");
+    try {
+      const accessToken = await getAccessToken();
+      const response = await fetch(`${apiBaseUrl}/v1/meetings/${meetingId}/translate`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ target_language: "english", sections: [section] })
+      });
+      const payload = await response.json().catch(() => null);
+      if (!response.ok) throw new Error(payload?.detail ?? "Unable to translate this content.");
+      await refreshMeetingData();
+      setEnglishSections((current) => new Set(current).add(section));
+    } catch (translationFailure) {
+      setTranslationError(translationFailure instanceof Error ? translationFailure.message : "Unable to translate this content.");
+    } finally {
+      setTranslatingSection(null);
+    }
+  }
+
+  function translationButton(section: TranslationSection) {
+    if (isEnglishLanguage(meeting?.transcript_language ?? meeting?.detected_language)) return null;
+    const showingEnglish = englishSections.has(section);
+    return (
+      <button className="rounded-md border border-slate-300 bg-white px-2.5 py-1 text-xs font-medium text-ink disabled:text-slate-400" type="button" disabled={translatingSection === section} onClick={() => void toggleTranslation(section)}>
+        {translatingSection === section ? "Translating…" : showingEnglish ? "Show Original" : "Show English"}
+      </button>
+    );
   }
 
   const generateAnalysis = useCallback(async () => {
@@ -1355,7 +1403,17 @@ export function MeetingDetail({ meetingId }: { meetingId: string }) {
             </dt>
             <dd className="mt-1 text-sm font-semibold text-ink">
               {formatLanguage(meeting.transcript_language)}
-              {meeting.transcript_kind === "both" ? " (translated)" : ""}
+            </dd>
+          </div>
+          <div className="rounded-lg border border-slate-200 bg-slate-50 p-4">
+            <dt className="text-xs font-medium uppercase tracking-wide text-slate-500">
+              Current Display Language
+            </dt>
+            <dd className="mt-1 text-sm font-semibold text-ink">
+              Original ({formatLanguage(meeting.transcript_language ?? meeting.detected_language)})
+              {meeting.translation_language
+                ? ` · Translation target: ${formatLanguage(meeting.translation_language)}`
+                : ""}
             </dd>
           </div>
           <div className="rounded-lg border border-slate-200 bg-slate-50 p-4">
@@ -1373,17 +1431,7 @@ export function MeetingDetail({ meetingId }: { meetingId: string }) {
             <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
               <div>
                 <p className="text-sm font-medium text-ink">Audio Player</p>
-                <label className="mt-2 flex items-center gap-2 text-sm text-slate-600">
-                  <input
-                    className="h-4 w-4 rounded border-slate-300 text-signal focus:ring-signal"
-                    type="checkbox"
-                    checked={translateToEnglish}
-                    onChange={(event) =>
-                      setTranslateToEnglish(event.target.checked)
-                    }
-                  />
-                  Translate non-English audio to English
-                </label>
+                <p className="mt-2 text-sm text-slate-600">Transcript output: Original language</p>
               </div>
               {transcriptionUi.showAction ? (
                 <button
@@ -1476,6 +1524,9 @@ export function MeetingDetail({ meetingId }: { meetingId: string }) {
         className="rounded-lg border border-slate-200 bg-white p-6 shadow-sm"
         id="meeting-intelligence"
       >
+        {translationError ? (
+          <div className="mb-4 rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700">{translationError}</div>
+        ) : null}
         <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
           <div>
             <h3 className="text-base font-semibold text-ink">
@@ -1515,16 +1566,16 @@ export function MeetingDetail({ meetingId }: { meetingId: string }) {
 
         <div className="mt-5 grid gap-4 lg:grid-cols-2">
           <article className="rounded-lg border border-slate-200 bg-slate-50 p-4">
-            <h4 className="text-sm font-semibold text-ink">Executive Summary</h4>
+            <div className="flex items-center justify-between gap-2"><h4 className="text-sm font-semibold text-ink">Executive Summary</h4>{translationButton("summary")}</div>
             <p className="mt-2 text-sm leading-6 text-slate-700">
-              {meeting.summary || "No summary has been generated yet."}
+              {(englishSections.has("summary") ? meeting.summary_translated : meeting.summary) || "No summary has been generated yet."}
             </p>
           </article>
 
           <article className="rounded-lg border border-slate-200 bg-slate-50 p-4">
-            <h4 className="text-sm font-semibold text-ink">Meeting Brief</h4>
+            <div className="flex items-center justify-between gap-2"><h4 className="text-sm font-semibold text-ink">Meeting Brief</h4>{translationButton("brief")}</div>
             <p className="mt-2 text-sm leading-6 text-slate-700">
-              {meeting.brief || "No brief has been generated yet."}
+              {(englishSections.has("brief") ? meeting.brief_translated : meeting.brief) || "No brief has been generated yet."}
             </p>
           </article>
         </div>
@@ -1664,7 +1715,7 @@ export function MeetingDetail({ meetingId }: { meetingId: string }) {
       >
         <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
           <div>
-            <h3 className="text-base font-semibold text-ink">Transcript</h3>
+            <div className="flex items-center gap-3"><h3 className="text-base font-semibold text-ink">Transcript</h3>{translationButton("transcript")}</div>
             <p className="mt-1 text-sm text-slate-600">
               {isMeetingTranscribing
                 ? "Transcription is in progress."
@@ -1706,13 +1757,8 @@ export function MeetingDetail({ meetingId }: { meetingId: string }) {
                   </span>
                 </div>
                 <p className="mt-2 text-sm leading-6 text-ink">
-                  {segment.text}
+                  {displayedTranscriptText(segment, englishSections.has("transcript"))}
                 </p>
-                {segment.transcript_kind === "both" && segment.original_text ? (
-                  <p className="mt-2 border-l-2 border-slate-300 pl-3 text-sm leading-6 text-slate-600">
-                    Original: {segment.original_text}
-                  </p>
-                ) : null}
                 {participants.length > 1 ? (
                   <div className="mt-3">
                     <label
@@ -1761,7 +1807,7 @@ export function MeetingDetail({ meetingId }: { meetingId: string }) {
           className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm"
           id="action-items"
         >
-          <h3 className="text-base font-semibold text-ink">Action Items</h3>
+          <div className="flex items-center justify-between gap-2"><h3 className="text-base font-semibold text-ink">Action Items</h3>{translationButton("action_items")}</div>
           {actionItems.length > 0 ? (
             <div className="mt-4 grid gap-3">
               {actionItems.map((item) => (
@@ -1771,14 +1817,14 @@ export function MeetingDetail({ meetingId }: { meetingId: string }) {
                   key={item.id}
                 >
                   <div className="flex flex-wrap items-center gap-2">
-                    <p className="text-sm font-semibold text-ink">{item.title}</p>
+                    <p className="text-sm font-semibold text-ink">{englishSections.has("action_items") ? item.translated_title ?? item.title : item.title}</p>
                     <span className="rounded-full border border-slate-300 bg-white px-2 py-0.5 text-xs font-medium capitalize text-slate-600">
                       {item.status.replace("_", " ")}
                     </span>
                   </div>
                   {item.description ? (
                     <p className="mt-2 text-sm leading-6 text-slate-600">
-                      {item.description}
+                      {englishSections.has("action_items") ? item.translated_description ?? item.description : item.description}
                     </p>
                   ) : null}
                   {item.due_at ? (
@@ -1800,7 +1846,7 @@ export function MeetingDetail({ meetingId }: { meetingId: string }) {
           className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm"
           id="decisions"
         >
-          <h3 className="text-base font-semibold text-ink">Decisions</h3>
+          <div className="flex items-center justify-between gap-2"><h3 className="text-base font-semibold text-ink">Decisions</h3>{translationButton("decisions")}</div>
           {decisions.length > 0 ? (
             <div className="mt-4 grid gap-3">
               {decisions.map((decision) => (
@@ -1810,11 +1856,11 @@ export function MeetingDetail({ meetingId }: { meetingId: string }) {
                   key={decision.id}
                 >
                   <p className="text-sm font-semibold text-ink">
-                    {decision.title}
+                    {englishSections.has("decisions") ? decision.translated_title ?? decision.title : decision.title}
                   </p>
                   {decision.description ? (
                     <p className="mt-2 text-sm leading-6 text-slate-600">
-                      {decision.description}
+                      {englishSections.has("decisions") ? decision.translated_description ?? decision.description : decision.description}
                     </p>
                   ) : null}
                 </div>
@@ -1831,7 +1877,7 @@ export function MeetingDetail({ meetingId }: { meetingId: string }) {
           className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm"
           id="questions"
         >
-          <h3 className="text-base font-semibold text-ink">Questions</h3>
+          <div className="flex items-center justify-between gap-2"><h3 className="text-base font-semibold text-ink">Questions</h3>{translationButton("questions")}</div>
           {questions.length > 0 ? (
             <div className="mt-4 grid gap-3">
               {questions.map((question) => (
@@ -1842,7 +1888,7 @@ export function MeetingDetail({ meetingId }: { meetingId: string }) {
                 >
                   <div className="flex flex-wrap items-center gap-2">
                     <p className="text-sm font-semibold text-ink">
-                      {question.question}
+                      {englishSections.has("questions") ? question.translated_question ?? question.question : question.question}
                     </p>
                     <span className="rounded-full border border-slate-300 bg-white px-2 py-0.5 text-xs font-medium capitalize text-slate-600">
                       {question.status}
@@ -1850,7 +1896,7 @@ export function MeetingDetail({ meetingId }: { meetingId: string }) {
                   </div>
                   {question.answer ? (
                     <p className="mt-2 text-sm leading-6 text-slate-600">
-                      {question.answer}
+                      {englishSections.has("questions") ? question.translated_answer ?? question.answer : question.answer}
                     </p>
                   ) : null}
                 </div>
