@@ -5,10 +5,12 @@ import httpx
 from app import diarization
 from app.diarization import DiarizedTurn, align_transcript_rows_to_turns, align_words_to_diarization
 from app.main import (
+    _align_and_build_speaker_turn_rows,
     _attach_participants_to_transcript_rows,
     _build_transcript_rows,
     _merge_adjacent_speaker_segments,
     _build_word_timestamp_rows,
+    build_speaker_turn_rows,
 )
 
 
@@ -448,6 +450,124 @@ def test_two_minute_word_fixture_rebuilds_200_tokens_into_five_turns() -> None:
     assert " ".join(row["text"] for row in attached).split() == [
         word["text"] for word in words
     ]
+
+
+def test_fifty_consecutive_provider_words_become_one_turn() -> None:
+    words = [
+        _aligned_word(
+            index,
+            speaker="0",
+            start_ms=index * 300,
+            end_ms=index * 300 + 325,
+        )
+        for index in range(50)
+    ]
+    rows = build_speaker_turn_rows(words)
+    assert len(rows) == 1
+    assert rows[0]["provider_speaker_id"] == "0"
+    assert rows[0]["text"].split() == [word["text"] for word in words]
+
+
+def test_returning_speaker_words_create_three_turns_and_two_participants() -> None:
+    speaker_ids = ["0"] * 20 + ["1"] * 15 + ["0"] * 20
+    words = [
+        _aligned_word(
+            index,
+            speaker=speaker,
+            start_ms=index * 300,
+            end_ms=index * 300 + 325,
+        )
+        for index, speaker in enumerate(speaker_ids)
+    ]
+    rows = build_speaker_turn_rows(words)
+    client = FakeSupabaseClient()
+    attached = _attach_participants_to_transcript_rows(
+        client,
+        meeting_id="meeting-id",
+        rows=rows,
+    )
+    assert len(attached) == 3
+    assert len(client.participants.rows) == 2
+    assert attached[0]["participant_id"] == attached[2]["participant_id"]
+
+
+def test_provider_speaker_id_is_normalized_once_before_grouping() -> None:
+    words = [
+        _aligned_word(0, speaker="0", start_ms=0, end_ms=300),
+        _aligned_word(1, speaker="0", start_ms=300, end_ms=600),
+        _aligned_word(2, speaker="0", start_ms=600, end_ms=900),
+    ]
+    words[0]["provider_speaker_id"] = 0
+    words[1]["provider_speaker_id"] = "0"
+    words[2]["provider_speaker_id"] = "deepgram:0"
+    assert len(build_speaker_turn_rows(words)) == 1
+
+
+def test_production_word_orchestration_rebuilds_281_words_into_seven_turns() -> None:
+    block_sizes = [50, 40, 35, 45, 30, 41, 40]
+    block_speakers = ["0", "1", "2", "3", "0", "2", "1"]
+    speaker_ids = [
+        speaker
+        for size, speaker in zip(block_sizes, block_speakers)
+        for _ in range(size)
+    ]
+    word_rows = _build_word_timestamp_rows(
+        "meeting-id",
+        {
+            "words": [
+                {
+                    "word": f"token{index}",
+                    "start": index * 0.35,
+                    "end": index * 0.35 + 0.375,
+                }
+                for index in range(281)
+            ]
+        },
+    )
+    turns: list[DiarizedTurn] = []
+    first_word = 0
+    for size, speaker in zip(block_sizes, block_speakers):
+        is_final_block = first_word + size == len(word_rows)
+        turns.append(
+            DiarizedTurn(
+                speaker,
+                round(first_word * 350),
+                round(
+                    (first_word + size - 1) * 350 + 375
+                    if is_final_block
+                    else (first_word + size) * 350
+                ),
+                0.95,
+            )
+        )
+        first_word += size
+    diagnostics: dict = {}
+    aligned_words, grouped_rows = _align_and_build_speaker_turn_rows(
+        word_rows,
+        turns,
+        minimum_confidence=0.5,
+        minimum_overlap=0.5,
+        nearest_turn_tolerance_ms=250,
+        diagnostics=diagnostics,
+    )
+    client = FakeSupabaseClient()
+    attached = _attach_participants_to_transcript_rows(
+        client,
+        meeting_id="meeting-id",
+        rows=grouped_rows,
+    )
+    assert len(aligned_words) == 281
+    assert len(attached) == 7
+    assert len(client.participants.rows) == 4
+    assert diagnostics["final_transcript_row_count"] == 7
+    assert [row["segment_index"] for row in attached] == list(range(7))
+    assert " ".join(row["text"] for row in attached).split() == [
+        row["text"] for row in word_rows
+    ]
+    assert all(
+        previous["speaker_label"] != following["speaker_label"]
+        for previous, following in zip(attached, attached[1:])
+    )
 
 
 def test_long_same_speaker_splits_without_changing_identity() -> None:

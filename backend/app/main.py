@@ -218,6 +218,9 @@ MEETING_DETACHED_TABLES = ("audit_logs",)
 MAX_SAME_SPEAKER_PAUSE_MS = 1500
 MAX_MERGED_TRANSCRIPT_CHARACTERS = 1000
 MAX_MERGED_TRANSCRIPT_DURATION_MS = 45000
+MAX_SPEAKER_TURN_WORD_GAP_MS = 1500
+MAX_SPEAKER_TURN_DURATION_MS = 60000
+MAX_SPEAKER_TURN_CHARACTERS = 1500
 UNKNOWN_SPEAKER_LABEL = "Unknown Speaker"
 
 
@@ -354,6 +357,201 @@ def _segment_confidence(segment: dict[str, Any]) -> float | None:
         return None
 
     return float(value)
+
+
+def _normalize_provider_speaker_id(value: Any) -> str | None:
+    if value is None or isinstance(value, bool):
+        return None
+    normalized = str(value).strip()
+    if not normalized:
+        return None
+    return normalized.split(":", 1)[1] if normalized.startswith("deepgram:") else normalized
+
+
+def build_speaker_turn_rows(
+    aligned_words: list[dict[str, Any]],
+    *,
+    maximum_word_gap_ms: int = MAX_SPEAKER_TURN_WORD_GAP_MS,
+    maximum_turn_duration_ms: int = MAX_SPEAKER_TURN_DURATION_MS,
+    maximum_turn_characters: int = MAX_SPEAKER_TURN_CHARACTERS,
+    diagnostics: dict[str, Any] | None = None,
+) -> list[dict[str, Any]]:
+    """Rebuild timestamped, speaker-aligned words into readable turns."""
+    turns: list[dict[str, Any]] = []
+    confidence_values: list[float] = []
+    split_by_pause = 0
+    split_by_size_limit = 0
+    speaker_transitions = 0
+
+    def start_turn(word: dict[str, Any]) -> dict[str, Any]:
+        nonlocal confidence_values
+        confidence = _segment_confidence(word)
+        confidence_values = [confidence] if confidence is not None else []
+        provider_speaker_id = _normalize_provider_speaker_id(
+            word.get("provider_speaker_id")
+        )
+        return {
+            "meeting_id": word.get("meeting_id"),
+            "speaker_label": word.get("speaker_label"),
+            "provider_speaker_id": provider_speaker_id,
+            "start_ms": int(word.get("start_ms") or 0),
+            "end_ms": int(word.get("end_ms") or 0),
+            "text": _normalize_transcript_spacing(word.get("text")) or "",
+            "original_text": _normalize_transcript_spacing(word.get("original_text")),
+            "translated_text": _normalize_transcript_spacing(word.get("translated_text")),
+            "transcript_kind": word.get("transcript_kind"),
+            "confidence": confidence,
+            "diarization_available": bool(word.get("diarization_available")),
+            "diarization_ambiguous": bool(word.get("diarization_ambiguous")),
+            "segment_index": len(turns),
+        }
+
+    current: dict[str, Any] | None = None
+    ordered_words = sorted(
+        aligned_words,
+        key=lambda word: (
+            int(word.get("start_ms") or 0),
+            int(word.get("end_ms") or 0),
+            int(word.get("segment_index") or 0),
+        ),
+    )
+    for raw_word in ordered_words:
+        word = dict(raw_word)
+        word["provider_speaker_id"] = _normalize_provider_speaker_id(
+            word.get("provider_speaker_id")
+        )
+        if current is None:
+            current = start_turn(word)
+            continue
+
+        word_start_ms = int(word.get("start_ms") or 0)
+        word_end_ms = int(word.get("end_ms") or 0)
+        word_gap_ms = word_start_ms - int(current.get("end_ms") or 0)
+        joined = {
+            field: _join_transcript_tokens(current.get(field), word.get(field))
+            for field in ("text", "original_text", "translated_text")
+        }
+        same_speaker = (
+            current.get("provider_speaker_id") == word.get("provider_speaker_id")
+            and current.get("speaker_label") == word.get("speaker_label")
+        )
+        compatible_kind = current.get("transcript_kind") == word.get(
+            "transcript_kind"
+        )
+        within_size = all(
+            value is None or len(value) <= maximum_turn_characters
+            for value in joined.values()
+        )
+        within_duration = (
+            word_end_ms - int(current.get("start_ms") or 0)
+            <= maximum_turn_duration_ms
+        )
+        unambiguous = (
+            current.get("provider_speaker_id") is not None
+            and not current.get("diarization_ambiguous")
+            and not word.get("diarization_ambiguous")
+        )
+        if (
+            same_speaker
+            and compatible_kind
+            and word_gap_ms <= maximum_word_gap_ms
+            and within_duration
+            and within_size
+            and unambiguous
+        ):
+            current.update(joined)
+            current["end_ms"] = max(int(current.get("end_ms") or 0), word_end_ms)
+            confidence = _segment_confidence(word)
+            if confidence is not None:
+                confidence_values.append(confidence)
+            current["confidence"] = (
+                sum(confidence_values) / len(confidence_values)
+                if confidence_values
+                else None
+            )
+            continue
+
+        if same_speaker and word_gap_ms > maximum_word_gap_ms:
+            split_by_pause += 1
+        elif same_speaker and (not within_size or not within_duration):
+            split_by_size_limit += 1
+        elif current.get("provider_speaker_id") != word.get("provider_speaker_id"):
+            speaker_transitions += 1
+        turns.append(current)
+        current = start_turn(word)
+
+    if current is not None:
+        turns.append(current)
+    for index, turn in enumerate(turns):
+        turn["segment_index"] = index
+
+    if diagnostics is not None:
+        durations = [
+            max(0, int(turn["end_ms"]) - int(turn["start_ms"])) for turn in turns
+        ]
+        diagnostics.update(
+            {
+                "input_word_count": len(aligned_words),
+                "aligned_word_count": len(ordered_words),
+                "final_transcript_row_count": len(turns),
+                "average_words_per_row": (
+                    round(len(ordered_words) / len(turns), 2) if turns else 0
+                ),
+                "average_row_duration_ms": (
+                    round(sum(durations) / len(durations)) if durations else 0
+                ),
+                "speaker_transition_count": speaker_transitions,
+                "rows_split_by_pause": split_by_pause,
+                "rows_split_by_size_limit": split_by_size_limit,
+            }
+        )
+    return turns
+
+
+def _align_and_build_speaker_turn_rows(
+    word_rows: list[dict[str, Any]],
+    diarized_turns: list[Any],
+    *,
+    minimum_confidence: float,
+    minimum_overlap: float,
+    nearest_turn_tolerance_ms: int,
+    diagnostics: dict[str, Any] | None = None,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    aligned_words = align_words_to_diarization(
+        word_rows,
+        diarized_turns,
+        minimum_confidence=minimum_confidence,
+        minimum_overlap=minimum_overlap,
+        nearest_turn_tolerance_ms=nearest_turn_tolerance_ms,
+    )
+    safe_context = {
+        "input_word_row_count": len(aligned_words),
+        "first_input_keys": sorted(aligned_words[0].keys()) if aligned_words else [],
+        "unique_provider_speaker_ids": sorted(
+            {
+                provider_id
+                for word in aligned_words
+                if (
+                    provider_id := _normalize_provider_speaker_id(
+                        word.get("provider_speaker_id")
+                    )
+                )
+            }
+        ),
+        "unique_speaker_labels": sorted(
+            {str(word["speaker_label"]) for word in aligned_words if word.get("speaker_label")}
+        ),
+    }
+    logger.info("speaker turn grouping input", extra=safe_context)
+    grouped_rows = build_speaker_turn_rows(
+        aligned_words,
+        diagnostics=diagnostics,
+    )
+    logger.info(
+        "speaker turn grouping",
+        extra={**safe_context, "output_turn_row_count": len(grouped_rows)},
+    )
+    return aligned_words, grouped_rows
 
 
 def _merge_adjacent_speaker_segments(
@@ -1812,34 +2010,52 @@ async def _run_transcribe_meeting_job(
             transcription,
             transcript_kind=transcript_kind,
         )
-        if diarized_turns and word_rows:
-            rows = word_rows
         aligned_word_rows: list[dict[str, Any]] = []
-        rows = (
-            align_words_to_diarization(
+        grouping_diagnostics: dict[str, Any] = {}
+        word_level_alignment_was_used = bool(diarized_turns and word_rows)
+        if word_level_alignment_was_used:
+            aligned_word_rows, grouped_rows = _align_and_build_speaker_turn_rows(
                 word_rows,
                 diarized_turns,
                 minimum_confidence=settings.diarization_minimum_confidence,
                 minimum_overlap=settings.diarization_minimum_timestamp_overlap,
                 nearest_turn_tolerance_ms=settings.diarization_nearest_turn_tolerance_ms,
+                diagnostics=grouping_diagnostics,
             )
-            if diarized_turns and word_rows
-            else align_transcript_rows_to_turns(
+        else:
+            aligned_rows = align_transcript_rows_to_turns(
                 rows,
                 diarized_turns,
                 minimum_confidence=settings.diarization_minimum_confidence,
                 minimum_overlap=settings.diarization_minimum_timestamp_overlap,
             )
-        )
-        if diarized_turns and word_rows:
-            aligned_word_rows = rows
-        grouping_diagnostics: dict[str, Any] = {}
-        rows = _merge_adjacent_speaker_segments(
-            rows,
-            diagnostics=grouping_diagnostics,
-        )
-        grouping_diagnostics["input_word_count"] = len(word_rows)
-        grouping_diagnostics["aligned_word_count"] = len(aligned_word_rows)
+            grouped_rows = _merge_adjacent_speaker_segments(
+                aligned_rows,
+                diagnostics=grouping_diagnostics,
+            )
+            grouping_diagnostics["input_word_count"] = len(word_rows)
+            grouping_diagnostics["aligned_word_count"] = 0
+        if (
+            word_level_alignment_was_used
+            and len(aligned_word_rows) > 1
+            and len(grouped_rows) >= len(aligned_word_rows)
+        ):
+            logger.error(
+                "word grouping did not reduce transcript rows",
+                extra={
+                    "meeting_id": meeting_id,
+                    "aligned_word_row_count": len(aligned_word_rows),
+                    "grouped_turn_row_count": len(grouped_rows),
+                    "unique_provider_speaker_ids": sorted(
+                        {
+                            str(word["provider_speaker_id"])
+                            for word in aligned_word_rows
+                            if word.get("provider_speaker_id") is not None
+                        }
+                    ),
+                },
+            )
+        rows = grouped_rows
         unknown_row_count = sum(not row.get("speaker_label") for row in rows)
         logger.info(
             "Transcript diarization alignment completed",
@@ -1884,7 +2100,7 @@ async def _run_transcribe_meeting_job(
             .is_("email", "null")
             .execute()
         )
-        rows = _attach_participants_to_transcript_rows(
+        insert_rows = _attach_participants_to_transcript_rows(
             service_client,
             meeting_id=meeting_id,
             rows=rows,
@@ -1893,10 +2109,14 @@ async def _run_transcribe_meeting_job(
             "Transcript participants created",
             extra={
                 "meeting_id": meeting_id,
-                "participant_count": len({row.get("participant_id") for row in rows if row.get("participant_id")}),
+                "participant_count": len({row.get("participant_id") for row in insert_rows if row.get("participant_id")}),
             },
         )
-        service_client.table("transcript_segments").insert(rows).execute()
+        if any("provider_speaker_id" in row for row in insert_rows):
+            raise RuntimeError(
+                "Provider-only speaker fields were not removed before transcript insert"
+            )
+        service_client.table("transcript_segments").insert(insert_rows).execute()
         (
             service_client.table("meetings")
             .update(
