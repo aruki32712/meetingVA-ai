@@ -1240,7 +1240,10 @@ export function MeetingDetail({ meetingId }: { meetingId: string }) {
         </Link>
       </div>
 
-      <section className="rounded-lg border border-slate-200 bg-white p-6 shadow-sm">
+      <section
+        className="rounded-lg border border-slate-200 bg-white p-6 shadow-sm"
+        id="meeting-overview"
+      >
         <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
           <div>
             <p className="text-sm font-medium text-meadow">
@@ -1347,7 +1350,10 @@ export function MeetingDetail({ meetingId }: { meetingId: string }) {
         ) : null}
       </section>
 
-      <section className="rounded-lg border border-slate-200 bg-white p-6 shadow-sm">
+      <section
+        className="rounded-lg border border-slate-200 bg-white p-6 shadow-sm"
+        id="processing-timeline"
+      >
         <div>
           <h3 className="text-lg font-semibold text-ink">Processing Timeline</h3>
           <p className="mt-1 text-sm text-slate-600">
@@ -1415,7 +1421,10 @@ export function MeetingDetail({ meetingId }: { meetingId: string }) {
         </ol>
       </section>
 
-      <section className="rounded-lg border border-slate-200 bg-white p-6 shadow-sm">
+      <section
+        className="rounded-lg border border-slate-200 bg-white p-6 shadow-sm"
+        id="meeting-intelligence"
+      >
         <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
           <div>
             <h3 className="text-base font-semibold text-ink">
@@ -1470,7 +1479,10 @@ export function MeetingDetail({ meetingId }: { meetingId: string }) {
         </div>
       </section>
 
-      <section className="rounded-lg border border-slate-200 bg-white p-6 shadow-sm">
+      <section
+        className="rounded-lg border border-slate-200 bg-white p-6 shadow-sm"
+        id="participants"
+      >
         <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
           <div>
             <h3 className="text-base font-semibold text-ink">Speakers</h3>
@@ -1595,7 +1607,10 @@ export function MeetingDetail({ meetingId }: { meetingId: string }) {
         ) : null}
       </section>
 
-      <section className="rounded-lg border border-slate-200 bg-white p-6 shadow-sm">
+      <section
+        className="rounded-lg border border-slate-200 bg-white p-6 shadow-sm"
+        id="transcript"
+      >
         <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
           <div>
             <h3 className="text-base font-semibold text-ink">Transcript</h3>
@@ -1628,6 +1643,7 @@ export function MeetingDetail({ meetingId }: { meetingId: string }) {
             {transcriptSegments.map((segment) => (
               <article
                 className="rounded-lg border border-slate-200 bg-slate-50 p-4"
+                id={`transcript-segment-${segment.id}`}
                 key={segment.id}
               >
                 <div className="flex flex-wrap items-center gap-2 text-xs font-medium text-slate-500">
@@ -1690,13 +1706,17 @@ export function MeetingDetail({ meetingId }: { meetingId: string }) {
       </section>
 
       <section className="grid gap-4 lg:grid-cols-3">
-        <article className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+        <article
+          className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm"
+          id="action-items"
+        >
           <h3 className="text-base font-semibold text-ink">Action Items</h3>
           {actionItems.length > 0 ? (
             <div className="mt-4 grid gap-3">
               {actionItems.map((item) => (
                 <div
                   className="rounded-lg border border-slate-200 bg-slate-50 p-4"
+                  id={`action-item-${item.id}`}
                   key={item.id}
                 >
                   <div className="flex flex-wrap items-center gap-2">
@@ -1725,13 +1745,17 @@ export function MeetingDetail({ meetingId }: { meetingId: string }) {
           )}
         </article>
 
-        <article className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+        <article
+          className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm"
+          id="decisions"
+        >
           <h3 className="text-base font-semibold text-ink">Decisions</h3>
           {decisions.length > 0 ? (
             <div className="mt-4 grid gap-3">
               {decisions.map((decision) => (
                 <div
                   className="rounded-lg border border-slate-200 bg-slate-50 p-4"
+                  id={`decision-${decision.id}`}
                   key={decision.id}
                 >
                   <p className="text-sm font-semibold text-ink">
@@ -1752,13 +1776,17 @@ export function MeetingDetail({ meetingId }: { meetingId: string }) {
           )}
         </article>
 
-        <article className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+        <article
+          className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm"
+          id="questions"
+        >
           <h3 className="text-base font-semibold text-ink">Questions</h3>
           {questions.length > 0 ? (
             <div className="mt-4 grid gap-3">
               {questions.map((question) => (
                 <div
                   className="rounded-lg border border-slate-200 bg-slate-50 p-4"
+                  id={`question-${question.id}`}
                   key={question.id}
                 >
                   <div className="flex flex-wrap items-center gap-2">

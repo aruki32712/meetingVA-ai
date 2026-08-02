@@ -538,7 +538,30 @@ type Database = {
       };
     };
     Views: Record<string, never>;
-    Functions: Record<string, never>;
+    Functions: {
+      search_meetings: {
+        Args: {
+          search_text?: string;
+          date_from?: string | null;
+          date_to?: string | null;
+          status_filter?: string | null;
+          participant_filter?: string | null;
+          tag_filter?: string | null;
+          result_limit?: number;
+        };
+        Returns: Array<{
+          meeting_id: string;
+          meeting_title: string;
+          scheduled_at: string | null;
+          meeting_status: string;
+          matching_excerpt: string;
+          match_type: string;
+          match_anchor: string | null;
+          rank: number;
+          additional_match_types: string[];
+        }>;
+      };
+    };
     Enums: {
       attachment_kind: AttachmentKind;
       meeting_status: MeetingStatus;

@@ -4,14 +4,12 @@ import Link from "next/link";
 import { FormEvent, useEffect, useState } from "react";
 import { createBrowserSupabaseClient } from "@/lib/supabase";
 import { formatDate } from "./meeting-utils";
-
-type SearchResult = {
-  id: string;
-  title: string;
-  description: string | null;
-  scheduled_at: string | null;
-  status: string;
-};
+import {
+  meetingSearchResultHref,
+  normalizeMeetingSearchTerm,
+  validateMeetingSearchTerm,
+  type MeetingSearchRpcResult
+} from "./meeting-search-state";
 
 type FilterOptions = {
   participants: string[];
@@ -39,7 +37,7 @@ export function MeetingSearch() {
     participants: [],
     tags: []
   });
-  const [results, setResults] = useState<SearchResult[]>([]);
+  const [results, setResults] = useState<MeetingSearchRpcResult[]>([]);
   const [hasSearched, setHasSearched] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState("");
@@ -108,6 +106,13 @@ export function MeetingSearch() {
     setHasSearched(true);
 
     try {
+      const normalizedQuery = normalizeMeetingSearchTerm(query);
+      const validationError = validateMeetingSearchTerm(normalizedQuery);
+
+      if (validationError) {
+        throw new Error(validationError);
+      }
+
       const supabase = createBrowserSupabaseClient();
       const { data: userData, error: userError } = await supabase.auth.getUser();
 
@@ -115,51 +120,35 @@ export function MeetingSearch() {
         throw userError ?? new Error("You must be signed in to search meetings.");
       }
 
-      let meetingsQuery = supabase
-        .from("meetings")
-        .select("id,title,description,scheduled_at,status")
-        .eq("owner_id", userData.user.id)
-        .order("scheduled_at", { ascending: false })
-        .limit(50);
-
-      if (query.trim()) {
-        const escapedQuery = query.trim().replaceAll(",", "");
-        meetingsQuery = meetingsQuery.or(
-          `title.ilike.%${escapedQuery}%,description.ilike.%${escapedQuery}%`
-        );
-      }
-
-      if (dateFrom) {
-        meetingsQuery = meetingsQuery.gte(
-          "scheduled_at",
-          `${dateFrom}T00:00:00.000Z`
-        );
-      }
-
-      if (dateTo) {
-        meetingsQuery = meetingsQuery.lte(
-          "scheduled_at",
-          `${dateTo}T23:59:59.999Z`
-        );
-      }
-
-      if (status) {
-        meetingsQuery = meetingsQuery.eq("status", status);
-      }
-
-      const { data, error: searchError } = await meetingsQuery;
+      const { data, error: searchError } = await supabase.rpc(
+        "search_meetings",
+        {
+          search_text: normalizedQuery,
+          date_from: dateFrom || null,
+          date_to: dateTo || null,
+          status_filter: status || null,
+          participant_filter: participant.trim() || null,
+          tag_filter: tag.trim() || null,
+          result_limit: 50
+        }
+      );
 
       if (searchError) {
         throw searchError;
       }
 
-      setResults(data ?? []);
+      setResults((data ?? []) as MeetingSearchRpcResult[]);
     } catch (searchError) {
       setResults([]);
       setError(
         searchError instanceof Error
           ? searchError.message
-          : "Unable to search meetings."
+          : typeof searchError === "object" &&
+              searchError !== null &&
+              "message" in searchError &&
+              typeof searchError.message === "string"
+            ? searchError.message
+            : "Unable to search meetings."
       );
     } finally {
       setIsLoading(false);
@@ -319,7 +308,7 @@ export function MeetingSearch() {
 
       {!isLoading && !error && hasSearched && results.length === 0 ? (
         <SearchMessage
-          title="No matching meetings"
+          title="No matching meetings found"
           body="Try a broader search term, remove a filter, or choose a wider date range."
         />
       ) : null}
@@ -333,27 +322,38 @@ export function MeetingSearch() {
           </div>
           <ul className="divide-y divide-slate-200">
             {results.map((result) => (
-              <li className="p-6" key={result.id}>
+              <li className="p-6" key={result.meeting_id}>
                 <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                   <div>
                     <Link
                       className="text-lg font-semibold text-signal hover:text-ink"
-                      href={`/dashboard/meetings/${result.id}`}
+                      href={meetingSearchResultHref(result)}
                     >
-                      {result.title}
+                      {result.meeting_title}
                     </Link>
                     <p className="mt-1 text-sm text-slate-500">
                       {formatDate(result.scheduled_at ?? "")}
                     </p>
                   </div>
                   <span className="w-fit rounded-full border border-meadow bg-emerald-50 px-3 py-1 text-xs font-medium capitalize text-meadow">
-                    {result.status}
+                    {result.meeting_status}
                   </span>
                 </div>
+                <div className="mt-3 flex flex-wrap items-center gap-2">
+                  <span className="rounded-full bg-blue-50 px-2.5 py-1 text-xs font-medium text-signal">
+                    {result.match_type}
+                  </span>
+                  {result.additional_match_types.map((matchType) => (
+                    <span
+                      className="rounded-full bg-slate-100 px-2.5 py-1 text-xs text-slate-600"
+                      key={matchType}
+                    >
+                      Also: {matchType}
+                    </span>
+                  ))}
+                </div>
                 <p className="mt-4 text-sm leading-6 text-slate-700">
-                  {renderHighlightedExcerpt(
-                    result.description ?? "No description provided."
-                  )}
+                  {renderHighlightedExcerpt(result.matching_excerpt)}
                 </p>
               </li>
             ))}
