@@ -7,7 +7,10 @@ import { createBrowserSupabaseClient } from "@/lib/supabase";
 import { formatDate, formatDuration } from "./meeting-utils";
 import {
   completeMeetingDeletion,
-  isMeetingDeletionConfirmed
+  isMeetingDeletionConfirmed,
+  MEETING_DELETED_EVENT,
+  requestMeetingDeletion,
+  tryBeginMeetingDeletion
 } from "./meeting-deletion-state";
 import {
   normalizeTimelineVisualStates,
@@ -30,6 +33,7 @@ import {
 
 type MeetingDetailRow = {
   id: string;
+  owner_id: string;
   title: string;
   description: string | null;
   scheduled_at: string | null;
@@ -355,6 +359,7 @@ export function MeetingDetail({ meetingId }: { meetingId: string }) {
   const [isDeleteDialogOpen, setIsDeleteDialogOpen] = useState(false);
   const [deleteConfirmation, setDeleteConfirmation] = useState("");
   const [isDeletingMeeting, setIsDeletingMeeting] = useState(false);
+  const deleteRequestInFlightRef = useRef(false);
   const [deletionError, setDeletionError] = useState("");
   const [translateToEnglish, setTranslateToEnglish] = useState(false);
   const [error, setError] = useState("");
@@ -806,28 +811,27 @@ export function MeetingDetail({ meetingId }: { meetingId: string }) {
   }
 
   async function deleteMeeting() {
-    if (!meeting || !isMeetingDeletionConfirmed(deleteConfirmation)) {
+    if (
+      !meeting ||
+      !isMeetingDeletionConfirmed(deleteConfirmation) ||
+      !tryBeginMeetingDeletion(deleteRequestInFlightRef)
+    ) {
       return;
     }
 
     setIsDeletingMeeting(true);
     setDeletionError("");
 
-    try {
-      const accessToken = await getAccessToken();
-      const response = await fetch(`${apiBaseUrl}/v1/meetings/${meetingId}`, {
-        method: "DELETE",
-        headers: {
-          Authorization: `Bearer ${accessToken}`
-        }
-      });
+    let deletionCompleted = false;
 
-      if (!response.ok) {
-        const payload = await response.json().catch(() => null);
-        throw new Error(payload?.detail ?? "Unable to delete this meeting.");
-      }
-
+    const finishDeletion = () => {
+      deletionCompleted = true;
       completeMeetingDeletion({
+        closeModal: () => setIsDeleteDialogOpen(false),
+        clearLoading: () => {
+          deleteRequestInFlightRef.current = false;
+          setIsDeletingMeeting(false);
+        },
         clearLocalState: () => {
           setMeeting(null);
           setTranscriptSegments([]);
@@ -838,17 +842,64 @@ export function MeetingDetail({ meetingId }: { meetingId: string }) {
           setProcessingEvents([]);
           setAudioUrl("");
         },
+        removeFromMeetingLists: () => {
+          window.dispatchEvent(
+            new CustomEvent(MEETING_DELETED_EVENT, {
+              detail: { meetingId }
+            })
+          );
+        },
         storeNotice: (message) => {
           window.sessionStorage.setItem("meetingva:notice", message);
         },
-        navigate: (path) => router.push(path)
+        navigate: (path) => router.replace(path)
       });
-    } catch (deleteError) {
-      setDeletionError(
-        getErrorMessage(deleteError, "Unable to delete this meeting.")
+    };
+
+    try {
+      const accessToken = await getAccessToken();
+      const result = await requestMeetingDeletion(() =>
+        fetch(`${apiBaseUrl}/v1/meetings/${meetingId}`, {
+          method: "DELETE",
+          headers: {
+            Authorization: `Bearer ${accessToken}`
+          }
+        })
       );
+
+      if (result.status === "success") {
+        finishDeletion();
+        return;
+      }
+
+      if (result.status === "http-error") {
+        setDeletionError(result.message);
+        return;
+      }
+
+      const supabase = createBrowserSupabaseClient();
+      const { data: remainingMeeting, error: verificationError } = await supabase
+        .from("meetings")
+        .select("id")
+        .eq("id", meetingId)
+        .eq("owner_id", meeting.owner_id)
+        .maybeSingle();
+
+      if (!verificationError && !remainingMeeting) {
+        finishDeletion();
+        return;
+      }
+
+      setDeletionError(
+        getErrorMessage(result.error, "A network error prevented deletion.")
+      );
+    } catch (deleteError) {
+      setDeletionError(getErrorMessage(deleteError, "Unable to delete this meeting."));
     } finally {
-      setIsDeletingMeeting(false);
+      if (!deletionCompleted) {
+        deleteRequestInFlightRef.current = false;
+        setIsDeletingMeeting(false);
+      }
     }
   }
 

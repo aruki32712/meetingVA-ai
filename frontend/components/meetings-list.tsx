@@ -4,6 +4,10 @@ import Link from "next/link";
 import { useEffect, useState } from "react";
 import { createBrowserSupabaseClient } from "@/lib/supabase";
 import { formatDate, formatDuration } from "./meeting-utils";
+import {
+  MEETING_DELETED_EVENT,
+  removeDeletedMeetingFromList
+} from "./meeting-deletion-state";
 
 type MeetingRow = {
   id: string;
@@ -78,6 +82,24 @@ export function MeetingsList() {
 
     return () => {
       isMounted = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    function removeDeletedMeeting(event: Event) {
+      const meetingId = (event as CustomEvent<{ meetingId?: string }>).detail
+        ?.meetingId;
+
+      if (meetingId) {
+        setMeetings((current) =>
+          removeDeletedMeetingFromList(current, meetingId)
+        );
+      }
+    }
+
+    window.addEventListener(MEETING_DELETED_EVENT, removeDeletedMeeting);
+    return () => {
+      window.removeEventListener(MEETING_DELETED_EVENT, removeDeletedMeeting);
     };
   }, []);
 

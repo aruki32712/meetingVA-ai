@@ -16,13 +16,13 @@ class Response:
 
 
 class FakeStorageBucket:
-    def __init__(self, *, fail: bool = False) -> None:
-        self.fail = fail
+    def __init__(self, *, failure_message: str | None = None) -> None:
+        self.failure_message = failure_message
         self.removed: list[str] = []
 
     def remove(self, paths: list[str]) -> list[dict[str, str]]:
-        if self.fail:
-            raise RuntimeError("storage unavailable")
+        if self.failure_message:
+            raise RuntimeError(self.failure_message)
 
         self.removed.extend(paths)
         return [{"name": path} for path in paths]
@@ -83,6 +83,7 @@ class FakeQuery:
             ]
 
             if self.table_name == "meetings" and matched:
+                self.client.meeting_deleted = True
                 meeting_ids = {row["id"] for row in matched}
 
                 for table_name in main.MEETING_CASCADE_TABLES:
@@ -103,7 +104,13 @@ class FakeQuery:
 
 
 class FakeServiceClient:
-    def __init__(self, *, active_status: str | None = None, storage_fail: bool = False):
+    def __init__(
+        self,
+        *,
+        active_status: str | None = None,
+        storage_failure_message: str | None = None,
+        verification_failure: bool = False,
+    ):
         meeting = {
             "id": MEETING_ID,
             "owner_id": OWNER_ID,
@@ -129,10 +136,14 @@ class FakeServiceClient:
                 }
             ]
 
-        self.bucket = FakeStorageBucket(fail=storage_fail)
+        self.verification_failure = verification_failure
+        self.meeting_deleted = False
+        self.bucket = FakeStorageBucket(failure_message=storage_failure_message)
         self.storage = FakeStorage(self.bucket)
 
     def table(self, table_name: str) -> FakeQuery:
+        if self.verification_failure and self.meeting_deleted and table_name == "audit_logs":
+            raise RuntimeError("verification unavailable")
         return FakeQuery(self, table_name)
 
 
@@ -187,7 +198,7 @@ def test_active_job_blocks_meeting_deletion(monkeypatch, status: str) -> None:
 
 
 def test_storage_failure_keeps_meeting_record(monkeypatch) -> None:
-    client = FakeServiceClient(storage_fail=True)
+    client = FakeServiceClient(storage_failure_message="storage unavailable")
     configure_endpoint(monkeypatch, client, OWNER_ID)
 
     with pytest.raises(HTTPException) as exc_info:
@@ -195,3 +206,27 @@ def test_storage_failure_keeps_meeting_record(monkeypatch) -> None:
 
     assert exc_info.value.status_code == 502
     assert len(client.rows["meetings"]) == 1
+
+
+def test_missing_audio_object_does_not_prevent_meeting_deletion(monkeypatch) -> None:
+    client = FakeServiceClient(storage_failure_message="Object not found")
+    configure_endpoint(monkeypatch, client, OWNER_ID)
+
+    result = asyncio.run(
+        main.delete_meeting(MEETING_ID, authorization="Bearer test-token")
+    )
+
+    assert result == {"meeting_id": MEETING_ID, "deleted": True}
+    assert client.rows["meetings"] == []
+
+
+def test_post_delete_verification_failure_still_returns_success(monkeypatch) -> None:
+    client = FakeServiceClient(verification_failure=True)
+    configure_endpoint(monkeypatch, client, OWNER_ID)
+
+    result = asyncio.run(
+        main.delete_meeting(MEETING_ID, authorization="Bearer test-token")
+    )
+
+    assert result == {"meeting_id": MEETING_ID, "deleted": True}
+    assert client.rows["meetings"] == []

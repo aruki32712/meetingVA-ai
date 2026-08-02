@@ -759,6 +759,18 @@ def _ensure_not_processing(service_client: Any, meeting_id: str) -> None:
         raise HTTPException(status_code=409, detail="Meeting is already processing.")
 
 
+def _is_missing_storage_object_error(exc: Exception) -> bool:
+    status_code = getattr(exc, "status_code", None)
+    if status_code == 404:
+        return True
+
+    message = str(exc).lower()
+    return any(
+        marker in message
+        for marker in ("object not found", "not found", "no such object", "404")
+    )
+
+
 def _delete_owned_meeting_data(
     service_client: Any,
     *,
@@ -792,20 +804,29 @@ def _delete_owned_meeting_data(
                 [audio_storage_path]
             )
         except Exception as exc:
-            logger.exception(
-                "Unable to remove meeting audio during deletion",
-                extra={
-                    "meeting_id": meeting_id,
-                    "exception_type": type(exc).__name__,
-                },
-            )
-            raise HTTPException(
-                status_code=502,
-                detail=(
-                    "The meeting audio could not be removed. The meeting was not "
-                    "deleted. Please try again."
-                ),
-            ) from exc
+            if _is_missing_storage_object_error(exc):
+                logger.info(
+                    "Meeting audio was already absent during deletion",
+                    extra={
+                        "meeting_id": meeting_id,
+                        "exception_type": type(exc).__name__,
+                    },
+                )
+            else:
+                logger.exception(
+                    "Unable to remove meeting audio during deletion",
+                    extra={
+                        "meeting_id": meeting_id,
+                        "exception_type": type(exc).__name__,
+                    },
+                )
+                raise HTTPException(
+                    status_code=502,
+                    detail=(
+                        "The meeting audio could not be removed. The meeting was not "
+                        "deleted. Please try again."
+                    ),
+                ) from exc
 
     try:
         (
@@ -825,38 +846,54 @@ def _delete_owned_meeting_data(
             detail="The meeting could not be deleted. Please try again.",
         ) from exc
 
-    remaining_meeting = (
-        service_client.table("meetings")
-        .select("id")
-        .eq("id", meeting_id)
-        .limit(1)
-        .execute()
-    )
-    remaining_relations = []
-
-    for table_name in (*MEETING_CASCADE_TABLES, *MEETING_DETACHED_TABLES):
-        response = (
-            service_client.table(table_name)
-            .select("meeting_id")
-            .eq("meeting_id", meeting_id)
+    try:
+        remaining_meeting = (
+            service_client.table("meetings")
+            .select("id")
+            .eq("id", meeting_id)
             .limit(1)
             .execute()
         )
 
-        if response.data:
-            remaining_relations.append(table_name)
+        if remaining_meeting.data:
+            raise HTTPException(
+                status_code=500,
+                detail="The meeting could not be deleted. Please try again.",
+            )
 
-    if remaining_meeting.data or remaining_relations:
-        logger.error(
-            "Meeting deletion cleanup verification failed",
+        remaining_relations = []
+        for table_name in (*MEETING_CASCADE_TABLES, *MEETING_DETACHED_TABLES):
+            response = (
+                service_client.table(table_name)
+                .select("meeting_id")
+                .eq("meeting_id", meeting_id)
+                .limit(1)
+                .execute()
+            )
+
+            if response.data:
+                remaining_relations.append(table_name)
+
+        if remaining_relations:
+            logger.error(
+                "Meeting deletion left dependent rows after the meeting was removed",
+                extra={
+                    "meeting_id": meeting_id,
+                    "remaining_relation_tables": remaining_relations,
+                },
+            )
+    except HTTPException:
+        raise
+    except Exception as exc:
+        # The meeting is already gone at this point. Do not turn successful,
+        # irreversible deletion into a client-visible failure merely because a
+        # best-effort cascade verification query failed.
+        logger.exception(
+            "Unable to verify meeting deletion cleanup",
             extra={
                 "meeting_id": meeting_id,
-                "remaining_relation_tables": remaining_relations,
+                "exception_type": type(exc).__name__,
             },
-        )
-        raise HTTPException(
-            status_code=500,
-            detail="Meeting deletion could not be verified. Please contact support.",
         )
 
 
