@@ -35,6 +35,7 @@ import {
   isEnglishLanguage,
   type TranslationSection
 } from "./meeting-translation-state";
+import { MeetingExportDialog } from "./meeting-export-dialog";
 
 type MeetingDetailRow = {
   id: string;
@@ -540,7 +541,7 @@ export function MeetingDetail({ meetingId }: { meetingId: string }) {
     const accessToken = sessionData.session?.access_token;
 
     if (!accessToken) {
-      throw new Error("You must be signed in to edit speakers.");
+      throw new Error("You must be signed in to continue.");
     }
 
     return accessToken;
@@ -1356,6 +1357,30 @@ export function MeetingDetail({ meetingId }: { meetingId: string }) {
             </p>
           </div>
           <div className="flex flex-wrap items-center gap-2">
+            <MeetingExportDialog
+              meetingId={meetingId}
+              meetingTitle={meeting.title}
+              apiBaseUrl={apiBaseUrl}
+              accessToken={getAccessToken}
+              englishTranslationAvailable={Boolean(
+                meeting.translation_language === "english" ||
+                meeting.summary_translated || meeting.brief_translated ||
+                transcriptSegments.some((segment) => segment.translated_text)
+              )}
+              availability={{
+                meeting_details: true,
+                executive_summary: Boolean(meeting.summary),
+                meeting_brief: Boolean(meeting.brief),
+                speakers: participants.length > 0,
+                transcript: transcriptSegments.length > 0,
+                timestamps: transcriptSegments.length > 0,
+                action_items: actionItems.length > 0,
+                decisions: decisions.length > 0,
+                questions: questions.length > 0,
+                tags: true,
+                processing_timeline: processingEvents.length > 0
+              }}
+            />
             <span className="rounded-full border border-meadow bg-emerald-50 px-3 py-1 text-xs font-medium text-meadow">
               {formatProcessingStatus(meeting.status)}
             </span>

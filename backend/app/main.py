@@ -15,7 +15,7 @@ from fastapi import FastAPI, Header, HTTPException, Request
 from fastapi.exception_handlers import http_exception_handler
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from app.diarization import align_transcript_rows_to_turns, diarize_audio_safely
 from app.supabase_client import get_supabase_anon_client, get_supabase_service_client
@@ -140,6 +140,33 @@ class TranslateMeetingRequest(BaseModel):
         return value.strip().lower()
 
 
+class ExportSections(BaseModel):
+    meeting_details: bool = True
+    executive_summary: bool = True
+    meeting_brief: bool = True
+    speakers: bool = False
+    transcript: bool = True
+    timestamps: bool = False
+    action_items: bool = True
+    decisions: bool = True
+    questions: bool = True
+    tags: bool = False
+    processing_timeline: bool = False
+
+
+class ExportMeetingRequest(BaseModel):
+    format: Literal["pdf", "docx", "md", "txt", "json"]
+    language: Literal["original", "english"] = "original"
+    sections: ExportSections
+
+    @model_validator(mode="after")
+    def require_export_content(self) -> "ExportMeetingRequest":
+        values = self.sections.model_dump(exclude={"timestamps"})
+        if not any(values.values()):
+            raise ValueError("Select at least one section to export.")
+        return self
+
+
 class JobResponse(BaseModel):
     meeting_id: str
     job_id: str
@@ -241,6 +268,21 @@ def _enforce_ai_rate_limit(user_id: str, action: str) -> None:
             detail="Too many AI requests. Please wait before trying again.",
         )
 
+    events.append(now)
+
+
+def _enforce_export_rate_limit(user_id: str) -> None:
+    limit = 5
+    window_seconds = 60
+    now = time.monotonic()
+    events = ai_rate_limit_events[(user_id, "export")]
+    while events and now - events[0] >= window_seconds:
+        events.popleft()
+    if len(events) >= limit:
+        raise HTTPException(
+            status_code=429,
+            detail="Too many export requests. Please wait before trying again.",
+        )
     events.append(now)
 
 
@@ -2001,6 +2043,74 @@ async def translate_meeting_sections(
             raise HTTPException(status_code=502, detail="Unable to translate this content. Please try again.") from exc
 
     return {"meeting_id": meeting_id, "target_language": target, "sections": result, "cached": not bool(source)}
+
+
+def _fetch_meeting_export_data(client: Any, meeting_id: str) -> dict[str, Any]:
+    meeting_rows = (
+        client.table("meetings")
+        .select(
+            "id,title,description,status,scheduled_at,duration_seconds,detected_language,"
+            "transcript_language,translation_language,summary,brief,summary_translated,brief_translated"
+        ).eq("id", meeting_id).limit(1).execute().data or []
+    )
+    meeting = meeting_rows[0]
+    participants = client.table("participants").select("id,display_name,speaker_label").eq("meeting_id", meeting_id).execute().data or []
+    participant_names = {row["id"]: row.get("display_name") for row in participants}
+    transcript = client.table("transcript_segments").select("participant_id,speaker_label,start_ms,end_ms,text,original_text,translated_text,segment_index").eq("meeting_id", meeting_id).order("segment_index").execute().data or []
+    speaking_ms: dict[str, int] = defaultdict(int)
+    for row in transcript:
+        row["display_name"] = participant_names.get(row.get("participant_id"))
+        if row.get("participant_id"):
+            speaking_ms[row["participant_id"]] += max(0, int(row.get("end_ms") or 0) - int(row.get("start_ms") or 0))
+    total_speaking_ms = sum(speaking_ms.values())
+    speakers = [{
+        "display_name": row.get("display_name"), "speaker_label": row.get("speaker_label"),
+        "speaking_time_ms": speaking_ms.get(row["id"], 0),
+        "speaking_percentage": round((speaking_ms.get(row["id"], 0) / total_speaking_ms * 100), 1) if total_speaking_ms else 0,
+    } for row in participants]
+    action_items = client.table("action_items").select("title,description,translated_title,translated_description,assignee_participant_id,due_at,status").eq("meeting_id", meeting_id).order("created_at").execute().data or []
+    for row in action_items:
+        row["assignee"] = participant_names.get(row.get("assignee_participant_id"))
+    decisions = client.table("decisions").select("title,description,translated_title,translated_description").eq("meeting_id", meeting_id).order("created_at").execute().data or []
+    questions = client.table("questions").select("question,answer,translated_question,translated_answer,status").eq("meeting_id", meeting_id).order("created_at").execute().data or []
+    tag_links = client.table("meeting_tags").select("tags(name)").eq("meeting_id", meeting_id).execute().data or []
+    tags = [row["tags"]["name"] for row in tag_links if isinstance(row.get("tags"), dict) and row["tags"].get("name")]
+    timeline = client.table("processing_events").select("event_type,status,message,created_at,event_order").eq("meeting_id", meeting_id).order("created_at").order("event_order").execute().data or []
+    return {"meeting": meeting, "transcript": transcript, "speakers": speakers, "action_items": action_items, "decisions": decisions, "questions": questions, "tags": tags, "processing_timeline": timeline}
+
+
+@app.post("/v1/meetings/{meeting_id}/export", tags=["meetings"])
+async def export_meeting(
+    meeting_id: str,
+    payload: ExportMeetingRequest,
+    authorization: str | None = Header(default=None),
+) -> Response:
+    from app.meeting_export import CONTENT_TYPES, build_export_document, render_export, safe_export_filename
+
+    meeting_id = _validate_uuid(meeting_id, "meeting_id")
+    token = _require_bearer_token(authorization)
+    client = get_supabase_service_client()
+    user_id = _require_user_id(token)
+    _enforce_export_rate_limit(user_id)
+    _require_owned_meeting(client, meeting_id, user_id)
+    try:
+        data = _fetch_meeting_export_data(client, meeting_id)
+        document = build_export_document(data, payload.sections.model_dump(), payload.language)
+        content = render_export(document, payload.format)
+    except ValueError as exc:
+        raise HTTPException(status_code=413, detail=str(exc)) from exc
+    except Exception as exc:
+        logger.exception("Meeting export generation failed", extra={"meeting_id": meeting_id, "format": payload.format})
+        raise HTTPException(status_code=500, detail="Unable to prepare the meeting export.") from exc
+    filename = safe_export_filename(data["meeting"].get("title") or "meeting", data["meeting"].get("scheduled_at"), payload.format)
+    return Response(
+        content=content,
+        media_type=CONTENT_TYPES[payload.format].split(";", 1)[0],
+        headers={
+            "Content-Disposition": f'attachment; filename="{filename}"',
+            "X-Content-Type-Options": "nosniff",
+        },
+    )
 
 
 @app.get("/v1/meetings/{meeting_id}/jobs/{job_id}", tags=["meetings"])

@@ -263,6 +263,16 @@ Or paste the migration into the Supabase SQL editor for a first bootstrap.
 The migration creates the private `meeting-attachments` Storage bucket if it
 does not already exist.
 
+## Meeting Exports
+
+Meeting owners can generate private, in-memory exports from the meeting detail
+page in PDF, Word (`.docx`), Markdown, plain text, or JSON format. The export
+dialog supports original-language or available English content and lets users
+choose meeting details, summaries, speakers, transcript and timestamps, action
+items, decisions, questions, tags, and the processing timeline. Exports never
+include storage paths, credentials, participant email addresses, or worker
+metadata, and no public storage URL is created.
+
 ## Available Checks
 
 Every feature, release, deployment, and future Codex task must use
