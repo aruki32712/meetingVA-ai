@@ -3,7 +3,7 @@ import test from "node:test";
 
 import {
   buildProgressTrackerSeed,
-  CURRENT_WORKFLOW_LABELS
+  CURRENT_ROADMAP_LABELS
 } from "../components/progress-tracker-seed.ts";
 
 test("completed progress seed matches the production workflow", () => {
@@ -14,7 +14,7 @@ test("completed progress seed matches the production workflow", () => {
 
   assert.deepEqual(
     phases.map((phase) => phase.title),
-    [...CURRENT_WORKFLOW_LABELS]
+    [...CURRENT_ROADMAP_LABELS]
   );
   assert.equal(new Set(phases.map((phase) => phase.title)).size, phases.length);
   assert.ok(phases.every((phase) => phase.status === "complete"));
@@ -34,14 +34,14 @@ test("completed progress seed matches the production workflow", () => {
 
 test("in-progress seed has one current stage with completed and pending neighbors", () => {
   const phases = buildProgressTrackerSeed(
-    "Transcribing",
+    "Transcription Pipeline",
     new Date("2026-08-01T14:00:00.000Z")
   );
   const currentIndex = phases.findIndex(
     (phase) => phase.status === "in_progress"
   );
 
-  assert.equal(currentIndex, 3);
+  assert.equal(currentIndex, 2);
   assert.equal(
     phases.filter((phase) => phase.status === "in_progress").length,
     1
@@ -56,18 +56,27 @@ test("in-progress seed has one current stage with completed and pending neighbor
   );
 });
 
-test("analysis completion seed contains current Meeting Intelligence fields", () => {
-  const analysis = buildProgressTrackerSeed().at(-1);
-
-  assert.equal(analysis?.title, "Analysis Complete");
-  assert.deepEqual(
-    analysis?.checklistItems.map((item) => item.label),
-    [
-      "Executive Summary",
-      "Meeting Brief",
-      "Action Items",
-      "Decisions",
-      "Questions"
-    ]
+test("roadmap seed contains the current MeetingVA production capabilities", () => {
+  const checklistLabels = buildProgressTrackerSeed().flatMap((phase) =>
+    phase.checklistItems.map((item) => item.label)
   );
+
+  assert.deepEqual(checklistLabels, [
+    "Authentication",
+    "Meeting creation",
+    "Audio upload",
+    "Delete meeting",
+    "Automatic transcription",
+    "Processing timeline",
+    "OpenAI transcription",
+    "Analysis",
+    "Executive summary",
+    "Meeting brief",
+    "Action items",
+    "Decisions",
+    "Questions",
+    "Speaker handling",
+    "Diarization",
+    "UI polish"
+  ]);
 });

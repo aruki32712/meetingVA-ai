@@ -6,6 +6,11 @@ import {
   buildProgressTrackerSeed,
   type SeededProgressStatus
 } from "./progress-tracker-seed";
+import {
+  getCompletionPercentage,
+  getProgressTrackerView,
+  resolveProgressLoad
+} from "./progress-tracker-state";
 
 type PhaseStatus = SeededProgressStatus;
 
@@ -54,17 +59,6 @@ function getStatusClasses(status: PhaseStatus) {
   }
 }
 
-function getCompletionPercentage(phases: ProgressPhase[]) {
-  const items = phases.flatMap((phase) => phase.checklistItems);
-
-  if (items.length === 0) {
-    return 0;
-  }
-
-  const completed = items.filter((item) => item.is_complete).length;
-  return Math.round((completed / items.length) * 100);
-}
-
 function sortProgressData(
   phases: ProgressPhaseRow[],
   items: ChecklistItemRow[]
@@ -85,6 +79,7 @@ export function ProgressTracker() {
   const [error, setError] = useState("");
   const [savingPhaseId, setSavingPhaseId] = useState("");
   const [savingItemId, setSavingItemId] = useState("");
+  const [loadAttempt, setLoadAttempt] = useState(0);
 
   const completionPercentage = useMemo(
     () => getCompletionPercentage(phases),
@@ -199,25 +194,24 @@ export function ProgressTracker() {
       setIsLoading(true);
       setError("");
 
-      try {
-        const loadedPhases = await loadProgress();
+      const result = await resolveProgressLoad(loadProgress);
 
-        if (isMounted) {
-          setPhases(loadedPhases);
-        }
-      } catch (progressError) {
-        if (isMounted) {
-          setError(
-            progressError instanceof Error
-              ? progressError.message
-              : "Unable to load progress tracker."
-          );
-        }
-      } finally {
-        if (isMounted) {
-          setIsLoading(false);
-        }
+      if (!isMounted) {
+        return;
       }
+
+      if (result.status === "success") {
+        setPhases(result.data);
+      } else {
+        console.error("Progress tracker load failed", {
+          error: result.error,
+          message: result.message
+        });
+        setPhases([]);
+        setError(result.message);
+      }
+
+      setIsLoading(false);
     }
 
     hydrateProgress();
@@ -225,7 +219,7 @@ export function ProgressTracker() {
     return () => {
       isMounted = false;
     };
-  }, [loadProgress]);
+  }, [loadAttempt, loadProgress]);
 
   async function updatePhaseStatus(phaseId: string, status: PhaseStatus) {
     const previousPhases = phases;
@@ -280,10 +274,41 @@ export function ProgressTracker() {
     }
   }
 
-  if (isLoading) {
+  const view = getProgressTrackerView(isLoading, error, phases.length);
+
+  if (view === "loading") {
     return (
       <section className="rounded-lg border border-slate-200 bg-white p-6 shadow-sm">
         <p className="text-sm text-slate-600">Loading progress tracker...</p>
+      </section>
+    );
+  }
+
+  if (view === "error") {
+    return (
+      <section className="rounded-lg border border-red-200 bg-red-50 p-6 shadow-sm">
+        <h2 className="text-lg font-semibold text-red-800">
+          Unable to load progress tracker
+        </h2>
+        <p className="mt-2 text-sm text-red-700">{error}</p>
+        <button
+          className="mt-4 rounded-md border border-red-300 bg-white px-4 py-2 text-sm font-medium text-red-700 hover:bg-red-100"
+          type="button"
+          onClick={() => setLoadAttempt((attempt) => attempt + 1)}
+        >
+          Retry
+        </button>
+      </section>
+    );
+  }
+
+  if (view === "empty") {
+    return (
+      <section className="rounded-lg border border-slate-200 bg-white p-6 shadow-sm">
+        <h2 className="text-lg font-semibold text-ink">No roadmap items yet</h2>
+        <p className="mt-2 text-sm text-slate-600">
+          Roadmap phases and checklist items will appear here when available.
+        </p>
       </section>
     );
   }
@@ -318,12 +343,6 @@ export function ProgressTracker() {
           />
         </div>
       </section>
-
-      {error ? (
-        <div className="rounded-lg border border-red-200 bg-red-50 p-4 text-sm text-red-700">
-          {error}
-        </div>
-      ) : null}
 
       <section className="grid gap-4">
         {phases.map((phase) => (

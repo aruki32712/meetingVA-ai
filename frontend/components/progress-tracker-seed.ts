@@ -12,77 +12,72 @@ export type SeededProgressPhase = {
   checklistItems: Array<{ label: string; isComplete: boolean }>;
 };
 
-export const CURRENT_WORKFLOW_LABELS = [
-  "Meeting Created",
-  "Audio Uploaded",
-  "Queued (Transcription)",
-  "Transcribing",
-  "Transcript Complete",
-  "Queued (Analysis)",
-  "Analyzing",
-  "Analysis Complete"
+export const CURRENT_ROADMAP_LABELS = [
+  "Platform Foundation",
+  "Meeting Capture",
+  "Transcription Pipeline",
+  "Meeting Intelligence",
+  "Speaker Experience",
+  "Product Experience"
 ] as const;
 
-type WorkflowLabel = (typeof CURRENT_WORKFLOW_LABELS)[number];
+type RoadmapLabel = (typeof CURRENT_ROADMAP_LABELS)[number];
 
-const workflowSeedContent: Record<
-  WorkflowLabel,
+const roadmapSeedContent: Record<
+  RoadmapLabel,
   { description: string; checklistItems: string[] }
 > = {
-  "Meeting Created": {
-    description: "The authenticated owner created the meeting record.",
-    checklistItems: ["Meeting record created", "Meeting ownership recorded"]
+  "Platform Foundation": {
+    description: "Secure account access and user-owned MeetingVA data.",
+    checklistItems: ["Authentication"]
   },
-  "Audio Uploaded": {
-    description: "The meeting audio was uploaded to secure storage.",
-    checklistItems: ["Audio upload completed", "Audio storage path saved"]
+  "Meeting Capture": {
+    description: "Create, record, store, and safely remove meetings.",
+    checklistItems: ["Meeting creation", "Audio upload", "Delete meeting"]
   },
-  "Queued (Transcription)": {
-    description: "A transcription processing job was accepted and queued.",
-    checklistItems: ["Transcription job created", "Queued event recorded"]
-  },
-  Transcribing: {
-    description: "The worker is transcribing and diarizing the meeting audio.",
-    checklistItems: ["Worker started", "Audio processing started"]
-  },
-  "Transcript Complete": {
-    description: "Timestamped speaker turns are ready for review.",
-    checklistItems: ["Transcript segments stored", "Participants attached"]
-  },
-  "Queued (Analysis)": {
-    description: "A Meeting Intelligence analysis job was accepted and queued.",
-    checklistItems: ["Analysis job created", "Queued event recorded"]
-  },
-  Analyzing: {
-    description: "The worker is generating structured Meeting Intelligence.",
-    checklistItems: ["Analysis worker started", "Transcript analysis started"]
-  },
-  "Analysis Complete": {
-    description: "The complete Meeting Intelligence result is available.",
+  "Transcription Pipeline": {
+    description: "Automatically process uploaded audio into a transcript.",
     checklistItems: [
-      "Executive Summary",
-      "Meeting Brief",
-      "Action Items",
+      "Automatic transcription",
+      "Processing timeline",
+      "OpenAI transcription"
+    ]
+  },
+  "Meeting Intelligence": {
+    description: "Generate structured insights from completed transcripts.",
+    checklistItems: [
+      "Analysis",
+      "Executive summary",
+      "Meeting brief",
+      "Action items",
       "Decisions",
       "Questions"
     ]
+  },
+  "Speaker Experience": {
+    description: "Present stable speaker turns without fabricated identities.",
+    checklistItems: ["Speaker handling", "Diarization"]
+  },
+  "Product Experience": {
+    description: "Polish the end-to-end MeetingVA user experience.",
+    checklistItems: ["UI polish"]
   }
 };
 
 export function buildProgressTrackerSeed(
-  currentStage: WorkflowLabel | null = null,
+  currentStage: RoadmapLabel | null = null,
   seededAt = new Date()
 ): SeededProgressPhase[] {
   const currentIndex = currentStage
-    ? CURRENT_WORKFLOW_LABELS.indexOf(currentStage)
+    ? CURRENT_ROADMAP_LABELS.indexOf(currentStage)
     : -1;
   const firstTimestamp =
-    seededAt.getTime() - (CURRENT_WORKFLOW_LABELS.length - 1) * 60_000;
+    seededAt.getTime() - (CURRENT_ROADMAP_LABELS.length - 1) * 60_000;
 
-  return CURRENT_WORKFLOW_LABELS.map((title, index) => {
+  return CURRENT_ROADMAP_LABELS.map((title, index) => {
     const isCompleted = currentStage === null || index < currentIndex;
     const isCurrent = index === currentIndex;
-    const content = workflowSeedContent[title];
+    const content = roadmapSeedContent[title];
 
     return {
       title,
