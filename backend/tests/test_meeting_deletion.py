@@ -1,0 +1,197 @@
+import asyncio
+from typing import Any
+
+import pytest
+from fastapi import HTTPException
+
+from app import main
+
+MEETING_ID = "11111111-1111-1111-1111-111111111111"
+OWNER_ID = "22222222-2222-2222-2222-222222222222"
+
+
+class Response:
+    def __init__(self, data: list[dict[str, Any]]) -> None:
+        self.data = data
+
+
+class FakeStorageBucket:
+    def __init__(self, *, fail: bool = False) -> None:
+        self.fail = fail
+        self.removed: list[str] = []
+
+    def remove(self, paths: list[str]) -> list[dict[str, str]]:
+        if self.fail:
+            raise RuntimeError("storage unavailable")
+
+        self.removed.extend(paths)
+        return [{"name": path} for path in paths]
+
+
+class FakeStorage:
+    def __init__(self, bucket: FakeStorageBucket) -> None:
+        self.bucket = bucket
+
+    def from_(self, bucket_name: str) -> FakeStorageBucket:
+        assert bucket_name == "meeting-audio"
+        return self.bucket
+
+
+class FakeQuery:
+    def __init__(self, client: "FakeServiceClient", table_name: str) -> None:
+        self.client = client
+        self.table_name = table_name
+        self.filters: list[tuple[str, str, Any]] = []
+        self.operation = "select"
+        self.limit_count: int | None = None
+
+    def select(self, _columns: str) -> "FakeQuery":
+        self.operation = "select"
+        return self
+
+    def delete(self) -> "FakeQuery":
+        self.operation = "delete"
+        return self
+
+    def eq(self, column: str, value: Any) -> "FakeQuery":
+        self.filters.append(("eq", column, value))
+        return self
+
+    def in_(self, column: str, values: list[str]) -> "FakeQuery":
+        self.filters.append(("in", column, values))
+        return self
+
+    def limit(self, count: int) -> "FakeQuery":
+        self.limit_count = count
+        return self
+
+    def _matches(self, row: dict[str, Any]) -> bool:
+        return all(
+            row.get(column) == value
+            if operation == "eq"
+            else row.get(column) in value
+            for operation, column, value in self.filters
+        )
+
+    def execute(self) -> Response:
+        rows = self.client.rows[self.table_name]
+        matched = [row for row in rows if self._matches(row)]
+
+        if self.operation == "delete":
+            self.client.rows[self.table_name] = [
+                row for row in rows if not self._matches(row)
+            ]
+
+            if self.table_name == "meetings" and matched:
+                meeting_ids = {row["id"] for row in matched}
+
+                for table_name in main.MEETING_CASCADE_TABLES:
+                    self.client.rows[table_name] = [
+                        row
+                        for row in self.client.rows[table_name]
+                        if row.get("meeting_id") not in meeting_ids
+                    ]
+
+                for row in self.client.rows["audit_logs"]:
+                    if row.get("meeting_id") in meeting_ids:
+                        row["meeting_id"] = None
+
+        if self.limit_count is not None:
+            matched = matched[: self.limit_count]
+
+        return Response(matched)
+
+
+class FakeServiceClient:
+    def __init__(self, *, active_status: str | None = None, storage_fail: bool = False):
+        meeting = {
+            "id": MEETING_ID,
+            "owner_id": OWNER_ID,
+            "title": "Customer discovery",
+            "audio_storage_path": f"{OWNER_ID}/{MEETING_ID}/recording.webm",
+            "duration_seconds": 120,
+        }
+        self.rows: dict[str, list[dict[str, Any]]] = {
+            "meetings": [meeting],
+            "audit_logs": [{"id": "audit-1", "meeting_id": MEETING_ID}],
+        }
+
+        for table_name in main.MEETING_CASCADE_TABLES:
+            self.rows[table_name] = [
+                {
+                    "id": f"{table_name}-1",
+                    "meeting_id": MEETING_ID,
+                    **(
+                        {"status": active_status or "completed"}
+                        if table_name == "processing_jobs"
+                        else {}
+                    ),
+                }
+            ]
+
+        self.bucket = FakeStorageBucket(fail=storage_fail)
+        self.storage = FakeStorage(self.bucket)
+
+    def table(self, table_name: str) -> FakeQuery:
+        return FakeQuery(self, table_name)
+
+
+def configure_endpoint(monkeypatch: pytest.MonkeyPatch, client: FakeServiceClient, user_id: str):
+    monkeypatch.setattr(main, "get_supabase_service_client", lambda: client)
+    monkeypatch.setattr(main, "_require_user_id", lambda _token: user_id)
+
+
+def test_owner_deletes_meeting_audio_and_all_dependent_rows(monkeypatch) -> None:
+    client = FakeServiceClient()
+    configure_endpoint(monkeypatch, client, OWNER_ID)
+
+    result = asyncio.run(
+        main.delete_meeting(MEETING_ID, authorization="Bearer test-token")
+    )
+
+    assert result == {"meeting_id": MEETING_ID, "deleted": True}
+    assert client.rows["meetings"] == []
+    assert all(client.rows[table_name] == [] for table_name in main.MEETING_CASCADE_TABLES)
+    assert client.rows["audit_logs"][0]["meeting_id"] is None
+    assert client.bucket.removed == [f"{OWNER_ID}/{MEETING_ID}/recording.webm"]
+
+
+def test_non_owner_cannot_delete_meeting(monkeypatch) -> None:
+    client = FakeServiceClient()
+    configure_endpoint(
+        monkeypatch,
+        client,
+        "33333333-3333-3333-3333-333333333333",
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        asyncio.run(main.delete_meeting(MEETING_ID, authorization="Bearer test-token"))
+
+    assert exc_info.value.status_code == 404
+    assert len(client.rows["meetings"]) == 1
+    assert client.bucket.removed == []
+
+
+@pytest.mark.parametrize("status", ["queued", "transcribing", "analyzing"])
+def test_active_job_blocks_meeting_deletion(monkeypatch, status: str) -> None:
+    client = FakeServiceClient(active_status=status)
+    configure_endpoint(monkeypatch, client, OWNER_ID)
+
+    with pytest.raises(HTTPException) as exc_info:
+        asyncio.run(main.delete_meeting(MEETING_ID, authorization="Bearer test-token"))
+
+    assert exc_info.value.status_code == 409
+    assert "active" in str(exc_info.value.detail).lower()
+    assert len(client.rows["meetings"]) == 1
+    assert client.bucket.removed == []
+
+
+def test_storage_failure_keeps_meeting_record(monkeypatch) -> None:
+    client = FakeServiceClient(storage_fail=True)
+    configure_endpoint(monkeypatch, client, OWNER_ID)
+
+    with pytest.raises(HTTPException) as exc_info:
+        asyncio.run(main.delete_meeting(MEETING_ID, authorization="Bearer test-token"))
+
+    assert exc_info.value.status_code == 502
+    assert len(client.rows["meetings"]) == 1

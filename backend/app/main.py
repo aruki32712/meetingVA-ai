@@ -156,6 +156,18 @@ TRANSCRIPTION_UNKNOWN_ERROR = (
 )
 
 
+MEETING_CASCADE_TABLES = (
+    "processing_jobs",
+    "processing_events",
+    "transcript_segments",
+    "participants",
+    "action_items",
+    "decisions",
+    "questions",
+    "attachments",
+    "meeting_tags",
+)
+MEETING_DETACHED_TABLES = ("audit_logs",)
 MAX_SAME_SPEAKER_PAUSE_MS = 1500
 MAX_MERGED_TRANSCRIPT_CHARACTERS = 1500
 UNKNOWN_SPEAKER_LABEL = "Unknown Speaker"
@@ -745,6 +757,107 @@ def _ensure_not_processing(service_client: Any, meeting_id: str) -> None:
 
     if response.data:
         raise HTTPException(status_code=409, detail="Meeting is already processing.")
+
+
+def _delete_owned_meeting_data(
+    service_client: Any,
+    *,
+    meeting: dict[str, Any],
+    owner_id: str,
+) -> None:
+    meeting_id = str(meeting["id"])
+    active_jobs = (
+        service_client.table("processing_jobs")
+        .select("id,status")
+        .eq("meeting_id", meeting_id)
+        .in_("status", sorted(ACTIVE_PROCESSING_STATUSES))
+        .limit(1)
+        .execute()
+    )
+
+    if active_jobs.data:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "This meeting cannot be deleted while transcription or analysis "
+                "is active. Cancel processing and try again."
+            ),
+        )
+
+    audio_storage_path = meeting.get("audio_storage_path")
+
+    if audio_storage_path:
+        try:
+            service_client.storage.from_("meeting-audio").remove(
+                [audio_storage_path]
+            )
+        except Exception as exc:
+            logger.exception(
+                "Unable to remove meeting audio during deletion",
+                extra={
+                    "meeting_id": meeting_id,
+                    "exception_type": type(exc).__name__,
+                },
+            )
+            raise HTTPException(
+                status_code=502,
+                detail=(
+                    "The meeting audio could not be removed. The meeting was not "
+                    "deleted. Please try again."
+                ),
+            ) from exc
+
+    try:
+        (
+            service_client.table("meetings")
+            .delete()
+            .eq("id", meeting_id)
+            .eq("owner_id", owner_id)
+            .execute()
+        )
+    except Exception as exc:
+        logger.exception(
+            "Unable to delete owned meeting record",
+            extra={"meeting_id": meeting_id, "exception_type": type(exc).__name__},
+        )
+        raise HTTPException(
+            status_code=500,
+            detail="The meeting could not be deleted. Please try again.",
+        ) from exc
+
+    remaining_meeting = (
+        service_client.table("meetings")
+        .select("id")
+        .eq("id", meeting_id)
+        .limit(1)
+        .execute()
+    )
+    remaining_relations = []
+
+    for table_name in (*MEETING_CASCADE_TABLES, *MEETING_DETACHED_TABLES):
+        response = (
+            service_client.table(table_name)
+            .select("meeting_id")
+            .eq("meeting_id", meeting_id)
+            .limit(1)
+            .execute()
+        )
+
+        if response.data:
+            remaining_relations.append(table_name)
+
+    if remaining_meeting.data or remaining_relations:
+        logger.error(
+            "Meeting deletion cleanup verification failed",
+            extra={
+                "meeting_id": meeting_id,
+                "remaining_relation_tables": remaining_relations,
+            },
+        )
+        raise HTTPException(
+            status_code=500,
+            detail="Meeting deletion could not be verified. Please contact support.",
+        )
 
 
 def _enqueue_transcription_job_if_needed(
@@ -1583,6 +1696,24 @@ async def _run_analyze_meeting_job(
         "decision_count": len(rows["decisions"]),
         "question_count": len(rows["questions"]),
     }
+
+
+@app.delete("/v1/meetings/{meeting_id}", tags=["meetings"])
+async def delete_meeting(
+    meeting_id: str,
+    authorization: str | None = Header(default=None),
+) -> dict[str, Any]:
+    meeting_id = _validate_uuid(meeting_id, "meeting_id")
+    token = _require_bearer_token(authorization)
+    service_client = get_supabase_service_client()
+    user_id = _require_user_id(token)
+    meeting = _require_owned_meeting(service_client, meeting_id, user_id)
+    _delete_owned_meeting_data(
+        service_client,
+        meeting=meeting,
+        owner_id=user_id,
+    )
+    return {"meeting_id": meeting_id, "deleted": True}
 
 
 @app.post(

@@ -6,6 +6,7 @@ import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import { createBrowserSupabaseClient } from "@/lib/supabase";
 import { LogoutButton } from "./logout-button";
+import { MEETING_DELETED_NOTICE } from "./meeting-deletion-state";
 
 const navigationItems = [
   { href: "/dashboard", label: "Overview" },
@@ -27,6 +28,16 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
   const router = useRouter();
   const [user, setUser] = useState<User | null>(null);
   const [isLoading, setIsLoading] = useState(true);
+  const [notice, setNotice] = useState("");
+
+  useEffect(() => {
+    const storedNotice = window.sessionStorage.getItem("meetingva:notice");
+
+    if (storedNotice === MEETING_DELETED_NOTICE) {
+      setNotice(storedNotice);
+      window.sessionStorage.removeItem("meetingva:notice");
+    }
+  }, [pathname]);
 
   useEffect(() => {
     let isMounted = true;
@@ -112,7 +123,17 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
         </nav>
       </header>
 
-      <div className="flex-1 py-8">{children}</div>
+      <div className="flex-1 py-8">
+        {notice ? (
+          <div
+            className="mb-5 rounded-lg border border-emerald-200 bg-emerald-50 p-4 text-sm font-medium text-emerald-800"
+            role="status"
+          >
+            {notice}
+          </div>
+        ) : null}
+        {children}
+      </div>
     </main>
   );
 }

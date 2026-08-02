@@ -1,9 +1,14 @@
 "use client";
 
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { createBrowserSupabaseClient } from "@/lib/supabase";
 import { formatDate, formatDuration } from "./meeting-utils";
+import {
+  completeMeetingDeletion,
+  isMeetingDeletionConfirmed
+} from "./meeting-deletion-state";
 import {
   normalizeTimelineVisualStates,
   timelineStatusPresentation,
@@ -315,6 +320,7 @@ function buildProcessingTimeline(
 }
 
 export function MeetingDetail({ meetingId }: { meetingId: string }) {
+  const router = useRouter();
   const [meeting, setMeeting] = useState<MeetingDetailRow | null>(null);
   const [transcriptSegments, setTranscriptSegments] = useState<
     TranscriptSegment[]
@@ -346,6 +352,10 @@ export function MeetingDetail({ meetingId }: { meetingId: string }) {
     "transcription" | "analysis" | ""
   >("");
   const [isCancellingJob, setIsCancellingJob] = useState(false);
+  const [isDeleteDialogOpen, setIsDeleteDialogOpen] = useState(false);
+  const [deleteConfirmation, setDeleteConfirmation] = useState("");
+  const [isDeletingMeeting, setIsDeletingMeeting] = useState(false);
+  const [deletionError, setDeletionError] = useState("");
   const [translateToEnglish, setTranslateToEnglish] = useState(false);
   const [error, setError] = useState("");
   const [transcriptionError, setTranscriptionError] = useState("");
@@ -792,6 +802,53 @@ export function MeetingDetail({ meetingId }: { meetingId: string }) {
       setIsCancellingJob(false);
       setIsTranscribing(false);
       setIsAnalyzing(false);
+    }
+  }
+
+  async function deleteMeeting() {
+    if (!meeting || !isMeetingDeletionConfirmed(deleteConfirmation)) {
+      return;
+    }
+
+    setIsDeletingMeeting(true);
+    setDeletionError("");
+
+    try {
+      const accessToken = await getAccessToken();
+      const response = await fetch(`${apiBaseUrl}/v1/meetings/${meetingId}`, {
+        method: "DELETE",
+        headers: {
+          Authorization: `Bearer ${accessToken}`
+        }
+      });
+
+      if (!response.ok) {
+        const payload = await response.json().catch(() => null);
+        throw new Error(payload?.detail ?? "Unable to delete this meeting.");
+      }
+
+      completeMeetingDeletion({
+        clearLocalState: () => {
+          setMeeting(null);
+          setTranscriptSegments([]);
+          setParticipants([]);
+          setActionItems([]);
+          setDecisions([]);
+          setQuestions([]);
+          setProcessingEvents([]);
+          setAudioUrl("");
+        },
+        storeNotice: (message) => {
+          window.sessionStorage.setItem("meetingva:notice", message);
+        },
+        navigate: (path) => router.push(path)
+      });
+    } catch (deleteError) {
+      setDeletionError(
+        getErrorMessage(deleteError, "Unable to delete this meeting.")
+      );
+    } finally {
+      setIsDeletingMeeting(false);
     }
   }
 
@@ -1727,6 +1784,92 @@ export function MeetingDetail({ meetingId }: { meetingId: string }) {
           )}
         </article>
       </section>
+
+      <section className="rounded-lg border border-red-200 bg-white p-6 shadow-sm">
+        <h3 className="text-base font-semibold text-red-800">Danger zone</h3>
+        <p className="mt-2 text-sm leading-6 text-slate-600">
+          Permanently remove this meeting and all of its associated data.
+        </p>
+        <button
+          className="mt-4 rounded-md border border-red-300 bg-white px-4 py-2 text-sm font-medium text-red-700 transition hover:bg-red-50 disabled:cursor-not-allowed disabled:border-slate-300 disabled:text-slate-400"
+          type="button"
+          onClick={() => {
+            setDeleteConfirmation("");
+            setDeletionError("");
+            setIsDeleteDialogOpen(true);
+          }}
+          disabled={isProcessingActive}
+        >
+          Delete Meeting
+        </button>
+        {isProcessingActive ? (
+          <p className="mt-2 text-sm text-amber-700">
+            Cancel active processing before deleting this meeting.
+          </p>
+        ) : null}
+      </section>
+
+      {isDeleteDialogOpen ? (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/50 p-4"
+          role="presentation"
+        >
+          <section
+            aria-labelledby="delete-meeting-title"
+            aria-modal="true"
+            className="w-full max-w-lg rounded-xl border border-red-200 bg-white p-6 shadow-xl"
+            role="dialog"
+          >
+            <h3
+              className="text-xl font-semibold text-red-800"
+              id="delete-meeting-title"
+            >
+              Delete “{meeting.title}”?
+            </h3>
+            <p className="mt-3 text-sm leading-6 text-slate-700">
+              This deletion is permanent and cannot be undone. It removes the
+              transcript, participants, Meeting Intelligence analysis,
+              processing history, attachments, and stored audio.
+            </p>
+            <label className="mt-5 block text-sm font-medium text-ink">
+              Type <span className="font-bold">DELETE</span> to confirm
+              <input
+                autoComplete="off"
+                className="mt-2 w-full rounded-md border border-slate-300 px-3 py-2 text-sm outline-none focus:border-red-500 focus:ring-2 focus:ring-red-100"
+                value={deleteConfirmation}
+                onChange={(event) => setDeleteConfirmation(event.target.value)}
+              />
+            </label>
+            {deletionError ? (
+              <p className="mt-4 rounded-md border border-red-200 bg-red-50 p-3 text-sm text-red-700">
+                {deletionError}
+              </p>
+            ) : null}
+            <div className="mt-6 flex flex-wrap justify-end gap-3">
+              <button
+                className="rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-ink hover:bg-slate-50 disabled:cursor-not-allowed disabled:text-slate-400"
+                type="button"
+                onClick={() => setIsDeleteDialogOpen(false)}
+                disabled={isDeletingMeeting}
+              >
+                Keep Meeting
+              </button>
+              <button
+                className="rounded-md bg-red-700 px-4 py-2 text-sm font-medium text-white hover:bg-red-800 disabled:cursor-not-allowed disabled:bg-slate-300"
+                type="button"
+                onClick={deleteMeeting}
+                disabled={
+                  isDeletingMeeting ||
+                  isProcessingActive ||
+                  !isMeetingDeletionConfirmed(deleteConfirmation)
+                }
+              >
+                {isDeletingMeeting ? "Deleting…" : "Permanently Delete Meeting"}
+              </button>
+            </div>
+          </section>
+        </div>
+      ) : null}
     </div>
   );
 }
