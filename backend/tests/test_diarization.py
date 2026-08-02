@@ -452,7 +452,8 @@ def test_two_minute_word_fixture_rebuilds_200_tokens_into_five_turns() -> None:
     ]
 
 
-def test_fifty_consecutive_provider_words_become_one_turn() -> None:
+def test_fifty_consecutive_provider_words_become_one_turn(caplog) -> None:
+    caplog.set_level(logging.INFO)
     words = [
         _aligned_word(
             index,
@@ -466,6 +467,15 @@ def test_fifty_consecutive_provider_words_become_one_turn() -> None:
     assert len(rows) == 1
     assert rows[0]["provider_speaker_id"] == "0"
     assert rows[0]["text"].split() == [word["text"] for word in words]
+    pair_records = [
+        record
+        for record in caplog.records
+        if record.message == "speaker turn adjacent word pair"
+    ]
+    assert len(pair_records) == 20
+    assert all(record.same_provider for record in pair_records)
+    assert all(record.same_label for record in pair_records)
+    assert all(record.can_merge for record in pair_records)
 
 
 def test_returning_speaker_words_create_three_turns_and_two_participants() -> None:

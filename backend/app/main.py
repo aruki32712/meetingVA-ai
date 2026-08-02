@@ -382,6 +382,7 @@ def build_speaker_turn_rows(
     split_by_pause = 0
     split_by_size_limit = 0
     speaker_transitions = 0
+    adjacent_pair_count = 0
 
     def start_turn(word: dict[str, Any]) -> dict[str, Any]:
         nonlocal confidence_values
@@ -451,14 +452,41 @@ def build_speaker_turn_rows(
             and not current.get("diarization_ambiguous")
             and not word.get("diarization_ambiguous")
         )
-        if (
+        can_merge = (
             same_speaker
             and compatible_kind
             and word_gap_ms <= maximum_word_gap_ms
             and within_duration
             and within_size
             and unambiguous
-        ):
+        )
+        if adjacent_pair_count < 20:
+            logger.info(
+                "speaker turn adjacent word pair",
+                extra={
+                    "left_provider_speaker_id": current.get(
+                        "provider_speaker_id"
+                    ),
+                    "right_provider_speaker_id": word.get(
+                        "provider_speaker_id"
+                    ),
+                    "left_speaker_label": current.get("speaker_label"),
+                    "right_speaker_label": word.get("speaker_label"),
+                    "pause_ms": word_gap_ms,
+                    "same_provider": current.get("provider_speaker_id")
+                    == word.get("provider_speaker_id"),
+                    "same_label": current.get("speaker_label")
+                    == word.get("speaker_label"),
+                    "ambiguous": not unambiguous,
+                    "same_kind": compatible_kind,
+                    "within_pause": word_gap_ms <= maximum_word_gap_ms,
+                    "within_duration": within_duration,
+                    "within_characters": within_size,
+                    "can_merge": can_merge,
+                },
+            )
+        adjacent_pair_count += 1
+        if can_merge:
             current.update(joined)
             current["end_ms"] = max(int(current.get("end_ms") or 0), word_end_ms)
             confidence = _segment_confidence(word)
