@@ -22,6 +22,7 @@ class Settings(BaseSettings):
     diarization_maximum_turn_gap_ms: int = Field(default=750, ge=0, le=10000)
     diarization_minimum_confidence: float = Field(default=0.5, ge=0, le=1)
     diarization_minimum_timestamp_overlap: float = Field(default=0.5, ge=0, le=1)
+    diarization_nearest_turn_tolerance_ms: int = Field(default=250, ge=0, le=2000)
     redis_url: str = "redis://redis:6379/0"
     celery_broker_url: str = "redis://redis:6379/0"
     celery_result_backend: str = "redis://redis:6379/1"

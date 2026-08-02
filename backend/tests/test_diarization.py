@@ -3,7 +3,7 @@ import logging
 import httpx
 
 from app import diarization
-from app.diarization import DiarizedTurn, align_transcript_rows_to_turns
+from app.diarization import DiarizedTurn, align_transcript_rows_to_turns, align_words_to_diarization
 from app.main import (
     _attach_participants_to_transcript_rows,
     _build_transcript_rows,
@@ -57,6 +57,16 @@ def _align(rows: list[dict], turns: list[DiarizedTurn]) -> list[dict]:
         turns,
         minimum_confidence=0.5,
         minimum_overlap=0.5,
+    )
+
+
+def _align_words(rows: list[dict], turns: list[DiarizedTurn], *, tolerance: int = 250) -> list[dict]:
+    return align_words_to_diarization(
+        rows,
+        turns,
+        minimum_confidence=0.5,
+        minimum_overlap=0.5,
+        nearest_turn_tolerance_ms=tolerance,
     )
 
 
@@ -245,7 +255,7 @@ def test_word_timestamps_split_long_openai_segment_by_real_boundaries() -> None:
         {"word": "there", "start": 0.5, "end": 1.0},
         {"word": "Bonjour", "start": 1.0, "end": 1.5},
     ]})
-    aligned = _merge_adjacent_speaker_segments(_align(rows, [
+    aligned = _merge_adjacent_speaker_segments(_align_words(rows, [
         DiarizedTurn("0", 0, 1000, 0.9), DiarizedTurn("1", 1000, 1500, 0.9)
     ]))
     assert [(row["speaker_label"], row["text"]) for row in aligned] == [
@@ -253,6 +263,100 @@ def test_word_timestamps_split_long_openai_segment_by_real_boundaries() -> None:
     ]
     assert [row["segment_index"] for row in aligned] == [0, 1]
     assert [row["original_text"] for row in aligned] == ["Hello there", "Bonjour"]
+
+
+def test_three_speakers_inside_one_openai_segment_follow_word_boundaries() -> None:
+    words = _build_word_timestamp_rows("meeting-id", {"words": [
+        {"word": "One", "start": 0.0, "end": 0.5},
+        {"word": "two", "start": 0.5, "end": 1.0},
+        {"word": "Three", "start": 1.0, "end": 1.5},
+        {"word": "four", "start": 1.5, "end": 2.0},
+        {"word": "Five", "start": 2.0, "end": 2.5},
+    ]})
+    turns = [
+        DiarizedTurn("0", 0, 1000, 0.9),
+        DiarizedTurn("1", 1000, 2000, 0.9),
+        DiarizedTurn("2", 2000, 2500, 0.9),
+    ]
+    rows = _merge_adjacent_speaker_segments(_align_words(words, turns))
+    assert [(row["speaker_label"], row["text"], row["start_ms"], row["end_ms"]) for row in rows] == [
+        ("deepgram:0", "One two", 0, 1000),
+        ("deepgram:1", "Three four", 1000, 2000),
+        ("deepgram:2", "Five", 2000, 2500),
+    ]
+    assert [row["segment_index"] for row in rows] == [0, 1, 2]
+
+
+def test_mocked_provider_fixture_has_three_speakers_and_a_returning_turn() -> None:
+    provider_payload = {"results": {"channels": [{"alternatives": [{"words": [
+        {"word": "alpha", "speaker": 0, "start": 0.0, "end": 0.4, "speaker_confidence": 0.95},
+        {"word": "beta", "speaker": 1, "start": 0.4, "end": 0.8, "speaker_confidence": 0.95},
+        {"word": "gamma", "speaker": 2, "start": 0.8, "end": 1.2, "speaker_confidence": 0.95},
+        {"word": "again", "speaker": 0, "start": 1.2, "end": 1.6, "speaker_confidence": 0.95},
+    ]}]}]}}
+    openai_response = {"segments": [{"text": "alpha beta gamma again", "start": 0.0, "end": 1.6}], "words": [
+        {"word": "alpha", "start": 0.0, "end": 0.4},
+        {"word": "beta", "start": 0.4, "end": 0.8},
+        {"word": "gamma", "start": 0.8, "end": 1.2},
+        {"word": "again", "start": 1.2, "end": 1.6},
+    ]}
+    turns = diarization._deepgram_turns(provider_payload)
+    words = _build_word_timestamp_rows("meeting-id", openai_response)
+    rows = _merge_adjacent_speaker_segments(_align_words(words, turns))
+    client = FakeSupabaseClient()
+    attached = _attach_participants_to_transcript_rows(client, meeting_id="meeting-id", rows=rows)
+    assert [row["text"] for row in attached] == ["alpha", "beta", "gamma", "again"]
+    assert len(client.participants.rows) == 3
+    assert attached[0]["participant_id"] == attached[3]["participant_id"]
+    assert " ".join(row["text"] for row in attached) == openai_response["segments"][0]["text"]
+
+
+def test_recurring_speaker_creates_separate_turn_and_reuses_participant() -> None:
+    words = [_row(i, i * 500, (i + 1) * 500, text) for i, text in enumerate(("A", "B", "C", "A again"))]
+    turns = [
+        DiarizedTurn("0", 0, 500, 0.9), DiarizedTurn("1", 500, 1000, 0.9),
+        DiarizedTurn("2", 1000, 1500, 0.9), DiarizedTurn("0", 1500, 2000, 0.9),
+    ]
+    rows = _merge_adjacent_speaker_segments(_align_words(words, turns))
+    client = FakeSupabaseClient()
+    attached = _attach_participants_to_transcript_rows(client, meeting_id="meeting-id", rows=rows)
+    assert len(attached) == 4
+    assert attached[0]["participant_id"] == attached[3]["participant_id"]
+    assert len(client.participants.rows) == 3
+
+
+def test_word_grouping_preserves_punctuation_and_contractions() -> None:
+    words = [_row(i, i * 100, (i + 1) * 100, text) for i, text in enumerate(("Hello", ",", "I", "'m", "ready", "."))]
+    for word in words:
+        word["speaker_label"] = "deepgram:0"
+        word["provider_speaker_id"] = "0"
+    assert _merge_adjacent_speaker_segments(words)[0]["text"] == "Hello, I'm ready."
+
+
+def test_long_same_speaker_splits_without_changing_identity() -> None:
+    words = [_row(0, 0, 1000, "first"), _row(1, 1000, 2000, "second")]
+    for word in words:
+        word.update({"speaker_label": "deepgram:0", "provider_speaker_id": "0"})
+    rows = _merge_adjacent_speaker_segments(words, maximum_characters=8)
+    assert len(rows) == 2
+    assert {row["speaker_label"] for row in rows} == {"deepgram:0"}
+
+
+def test_ambiguous_overlapping_speakers_and_timestamp_gap_are_unknown() -> None:
+    overlapping = _row(0, 400, 600, "overlap")
+    gap = _row(1, 2000, 2100, "gap")
+    turns = [DiarizedTurn("0", 0, 700, 0.9), DiarizedTurn("1", 300, 1000, 0.9)]
+    aligned = _align_words([overlapping, gap], turns, tolerance=100)
+    assert [word["speaker_label"] for word in aligned] == [None, None]
+
+
+def test_translated_text_stays_on_original_word_turn() -> None:
+    words = [_row(0, 0, 500, "hola"), _row(1, 500, 1000, "mundo")]
+    words[0]["translated_text"] = "hello"
+    words[1]["translated_text"] = "world"
+    rows = _merge_adjacent_speaker_segments(_align_words(words, [DiarizedTurn("0", 0, 1000, 0.9)]))
+    assert rows[0]["original_text"] == "hola mundo"
+    assert rows[0]["translated_text"] == "hello world"
 
 
 def test_five_speaker_fixture_creates_five_stable_participants() -> None:

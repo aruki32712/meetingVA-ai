@@ -18,6 +18,7 @@ from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 from app.diarization import (
+    align_words_to_diarization,
     align_transcript_rows_to_turns,
     development_diarization_diagnostics,
     diarize_audio_safely,
@@ -216,6 +217,7 @@ MEETING_CASCADE_TABLES = (
 MEETING_DETACHED_TABLES = ("audit_logs",)
 MAX_SAME_SPEAKER_PAUSE_MS = 1500
 MAX_MERGED_TRANSCRIPT_CHARACTERS = 1500
+MAX_MERGED_TRANSCRIPT_DURATION_MS = 60000
 UNKNOWN_SPEAKER_LABEL = "Unknown Speaker"
 
 
@@ -322,6 +324,16 @@ def _normalize_transcript_spacing(value: Any) -> str | None:
     return " ".join(text.split()) if text else None
 
 
+def _join_transcript_tokens(left: Any, right: Any) -> str | None:
+    combined = " ".join(value for value in (_coerce_optional_text(left), _coerce_optional_text(right)) if value)
+    if not combined:
+        return None
+    combined = re.sub(r"\s+([,.;:!?%\)\]\}])", r"\1", combined)
+    combined = re.sub(r"([\(\[\{])\s+", r"\1", combined)
+    combined = re.sub(r"\b(\w+)\s+(['’](?:s|t|re|ve|ll|d|m))\b", r"\1\2", combined, flags=re.IGNORECASE)
+    return " ".join(combined.split())
+
+
 def _segment_confidence(segment: dict[str, Any]) -> float | None:
     value = segment.get("confidence")
 
@@ -336,6 +348,7 @@ def _merge_adjacent_speaker_segments(
     *,
     maximum_pause_ms: int = MAX_SAME_SPEAKER_PAUSE_MS,
     maximum_characters: int = MAX_MERGED_TRANSCRIPT_CHARACTERS,
+    maximum_duration_ms: int = MAX_MERGED_TRANSCRIPT_DURATION_MS,
 ) -> list[dict[str, Any]]:
     merged_rows: list[dict[str, Any]] = []
     confidence_values: list[list[float]] = []
@@ -364,16 +377,7 @@ def _merge_adjacent_speaker_segments(
                 current.get("end_ms") or 0
             )
             joined_values = {
-                key: _normalize_transcript_spacing(
-                    " ".join(
-                        value
-                        for value in (
-                            _coerce_optional_text(current.get(key)),
-                            _coerce_optional_text(candidate.get(key)),
-                        )
-                        if value
-                    )
-                )
+                key: _join_transcript_tokens(current.get(key), candidate.get(key))
                 for key in ("text", "original_text", "translated_text")
             }
             within_character_limit = all(
@@ -382,9 +386,17 @@ def _merge_adjacent_speaker_segments(
             )
             can_merge = (
                 current_label == candidate_label
+                and (
+                    current_label is not None
+                    or not current.get("diarization_available")
+                    and not candidate.get("diarization_available")
+                )
+                and current.get("provider_speaker_id") == candidate.get("provider_speaker_id")
                 and 0 <= pause_ms < maximum_pause_ms
                 and current.get("transcript_kind") == candidate.get("transcript_kind")
                 and within_character_limit
+                and int(candidate.get("end_ms") or 0) - int(current.get("start_ms") or 0)
+                <= maximum_duration_ms
             )
 
             if can_merge:
@@ -1202,6 +1214,9 @@ def _attach_participants_to_transcript_rows(
         row["speaker_label"] = label
         row["participant_id"] = participants_by_label[label]
         row.pop("diarization_confidence", None)
+        row.pop("diarization_ambiguous", None)
+        row.pop("diarization_available", None)
+        row.pop("provider_speaker_id", None)
 
     return rows
 
@@ -1736,12 +1751,25 @@ async def _run_transcribe_meeting_job(
         )
         if diarized_turns and word_rows:
             rows = word_rows
-        rows = align_transcript_rows_to_turns(
-            rows,
-            diarized_turns,
-            minimum_confidence=settings.diarization_minimum_confidence,
-            minimum_overlap=settings.diarization_minimum_timestamp_overlap,
+        aligned_word_rows: list[dict[str, Any]] = []
+        rows = (
+            align_words_to_diarization(
+                word_rows,
+                diarized_turns,
+                minimum_confidence=settings.diarization_minimum_confidence,
+                minimum_overlap=settings.diarization_minimum_timestamp_overlap,
+                nearest_turn_tolerance_ms=settings.diarization_nearest_turn_tolerance_ms,
+            )
+            if diarized_turns and word_rows
+            else align_transcript_rows_to_turns(
+                rows,
+                diarized_turns,
+                minimum_confidence=settings.diarization_minimum_confidence,
+                minimum_overlap=settings.diarization_minimum_timestamp_overlap,
+            )
         )
+        if diarized_turns and word_rows:
+            aligned_word_rows = rows
         rows = _merge_adjacent_speaker_segments(rows)
         unknown_row_count = sum(not row.get("speaker_label") for row in rows)
         logger.info(
@@ -1753,6 +1781,18 @@ async def _run_transcribe_meeting_job(
                 "aligned_transcript_row_count": len(rows),
                 "unknown_transcript_row_count": unknown_row_count,
                 "aligned_unique_speaker_ids": sorted({str(row["speaker_label"]) for row in rows if row.get("speaker_label")}),
+                "aligned_word_counts_by_speaker": {
+                    label: sum(1 for word in aligned_word_rows if word.get("speaker_label") == label)
+                    for label in sorted({str(word["speaker_label"]) for word in aligned_word_rows if word.get("speaker_label")})
+                },
+                "provider_speaker_transitions": [
+                    [turn.start_ms, turn.end_ms, turn.stable_label]
+                    for turn in diarized_turns
+                ],
+                "transcript_row_boundaries": [
+                    [row.get("start_ms"), row.get("end_ms"), row.get("speaker_label") or "Unknown Speaker"]
+                    for row in rows
+                ],
             },
         )
         if settings.environment.casefold() != "production":

@@ -365,12 +365,88 @@ def align_transcript_rows_to_turns(
         aligned["diarization_confidence"] = (
             best_turn.confidence if aligned["speaker_label"] else None
         )
+        aligned["provider_speaker_id"] = best_turn.speaker_id if aligned["speaker_label"] else None
+        aligned["diarization_available"] = bool(turns)
         aligned_rows.append(aligned)
 
     for index, row in enumerate(aligned_rows):
         row["segment_index"] = index
 
     return aligned_rows
+
+
+def align_words_to_diarization(
+    transcript_words: list[dict[str, Any]],
+    diarized_turns: list[DiarizedTurn],
+    *,
+    minimum_confidence: float,
+    minimum_overlap: float,
+    nearest_turn_tolerance_ms: int = 250,
+) -> list[dict[str, Any]]:
+    """Assign each timestamped transcript word to a provider speaker turn.
+
+    Text remains authoritative from the transcription provider. Diarization only
+    supplies speaker identity; it never causes words to be invented or reordered.
+    """
+    aligned_words: list[dict[str, Any]] = []
+    ordered_turns = sorted(diarized_turns, key=lambda turn: (turn.start_ms, turn.end_ms))
+
+    for word in sorted(transcript_words, key=lambda item: (int(item.get("start_ms") or 0), int(item.get("end_ms") or 0))):
+        aligned = dict(word)
+        start_ms = int(word.get("start_ms") or 0)
+        end_ms = max(start_ms, int(word.get("end_ms") or 0))
+        duration_ms = max(1, end_ms - start_ms)
+        midpoint_ms = start_ms + duration_ms / 2
+        candidates: list[tuple[int, DiarizedTurn]] = []
+
+        for turn in ordered_turns:
+            if turn.confidence is not None and turn.confidence < minimum_confidence:
+                continue
+            overlap_ms = max(0, min(end_ms, turn.end_ms) - max(start_ms, turn.start_ms))
+            if overlap_ms > 0:
+                candidates.append((overlap_ms, turn))
+
+        candidates.sort(key=lambda item: item[0], reverse=True)
+        selected: DiarizedTurn | None = None
+        ambiguous = False
+        if candidates:
+            best_overlap, best_turn = candidates[0]
+            midpoint_turns = [turn for _, turn in candidates if turn.start_ms <= midpoint_ms < turn.end_ms]
+            overlapping_speakers = any(
+                first_turn.stable_label != second_turn.stable_label
+                and max(first_turn.start_ms, second_turn.start_ms) < min(first_turn.end_ms, second_turn.end_ms)
+                for _, first_turn in candidates
+                for _, second_turn in candidates
+            )
+            ambiguous = (
+                len({turn.stable_label for turn in midpoint_turns}) > 1
+                or overlapping_speakers
+            )
+            if not ambiguous and (
+                best_overlap / duration_ms >= minimum_overlap
+                or best_turn.start_ms <= midpoint_ms < best_turn.end_ms
+            ):
+                selected = best_turn
+        elif nearest_turn_tolerance_ms:
+            distances = [
+                (min(abs(start_ms - turn.end_ms), abs(end_ms - turn.start_ms)), turn)
+                for turn in ordered_turns
+                if turn.confidence is None or turn.confidence >= minimum_confidence
+            ]
+            distances.sort(key=lambda item: item[0])
+            if distances and distances[0][0] <= nearest_turn_tolerance_ms:
+                tied = len(distances) > 1 and distances[1][0] == distances[0][0]
+                if not tied:
+                    selected = distances[0][1]
+
+        aligned["speaker_label"] = selected.stable_label if selected else None
+        aligned["provider_speaker_id"] = selected.speaker_id if selected else None
+        aligned["diarization_confidence"] = selected.confidence if selected else None
+        aligned["diarization_ambiguous"] = ambiguous
+        aligned["diarization_available"] = bool(ordered_turns)
+        aligned_words.append(aligned)
+
+    return aligned_words
 
 
 def development_diarization_diagnostics(
