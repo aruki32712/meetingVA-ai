@@ -41,3 +41,22 @@ export function parseTags(value: string) {
     .map((tag) => tag.trim())
     .filter(Boolean);
 }
+
+export function parseExpectedSpeakerCount(value: string) {
+  if (value === "auto" || value.trim() === "") {
+    return null;
+  }
+
+  const count = Number(value);
+  if (!Number.isInteger(count) || count < 1 || count > 20) {
+    throw new Error("Expected number of speakers must be between 1 and 20.");
+  }
+
+  return count;
+}
+
+export function countDetectedSpeakers(labels: Array<string | null>) {
+  return labels.filter(
+    (label) => label !== null && label !== "Unknown Speaker"
+  ).length;
+}

@@ -794,9 +794,50 @@ def test_deepgram_request_enables_diarization_and_sends_original_audio(monkeypat
         return httpx.Response(200, json={"results": {"channels": [{"alternatives": [{"words": [{"speaker": 0, "start": 0, "end": 1}]}]}]}})
     real_client = httpx.AsyncClient
     monkeypatch.setattr(diarization.httpx, "AsyncClient", lambda *args, **kwargs: real_client(*args, transport=httpx.MockTransport(handler), **kwargs))
-    monkeypatch.setattr(diarization, "get_settings", lambda: type("Settings", (), {"diarization_model": "nova-3", "diarization_maximum_turn_gap_ms": 750})())
-    turns = asyncio.run(diarization._diarize_with_deepgram(audio_bytes=b"original-audio", filename="recording.webm", content_type="audio/webm", api_key="secret"))
-    assert observed["query"] == {"diarize": "true", "utterances": "true", "punctuate": "true", "smart_format": "true", "model": "nova-3"}
+    monkeypatch.setattr(diarization, "get_settings", lambda: type("Settings", (), {"diarization_model": "nova-3", "diarization_model_version": "latest", "diarization_maximum_turn_gap_ms": 750, "diarization_minimum_confidence": 0.5})())
+    turns = asyncio.run(diarization._diarize_with_deepgram(audio_bytes=b"original-audio", filename="recording.webm", content_type="audio/webm", api_key="secret", expected_speakers=5))
+    assert observed["query"] == {"diarize": "true", "diarize_model": "latest", "utterances": "true", "punctuate": "true", "smart_format": "true", "model": "nova-3"}
+    assert "expected_speakers" not in observed["query"]
+    assert "min_speakers" not in observed["query"]
+    assert "max_speakers" not in observed["query"]
     assert observed["content_type"] == "audio/webm"
     assert observed["body"] == b"original-audio"
     assert turns[0].speaker_id == "0"
+
+
+def test_confidence_comparison_preserves_five_raw_speaker_ids() -> None:
+    units = [
+        DiarizedTurn(str(speaker), speaker * 1000, speaker * 1000 + 800, confidence)
+        for speaker, confidence in enumerate((0.2, 0.4, 0.6, 0.8, 0.95))
+    ]
+    comparison = diarization._confidence_filter_comparison(units, 0.5)
+    assert comparison["current"] == {"remaining_words": 3, "remaining_speakers": 3}
+    assert comparison["lower"] == {"remaining_words": 4, "remaining_speakers": 4}
+    assert comparison["none"] == {"remaining_words": 5, "remaining_speakers": 5}
+    assert {unit.speaker_id for unit in units} == {"0", "1", "2", "3", "4"}
+
+    high_confidence_units = [
+        DiarizedTurn(str(speaker), speaker * 1000, speaker * 1000 + 800, 0.9)
+        for speaker in range(5)
+    ]
+    assert diarization._confidence_filter_comparison(
+        high_confidence_units, 0.5
+    )["current"]["remaining_speakers"] == 5
+
+
+def test_five_raw_provider_ids_are_not_renumbered_by_turn_order() -> None:
+    payload = {"results": {"channels": [{"alternatives": [{"words": [
+        {"speaker": speaker, "start": index, "end": index + 0.5, "speaker_confidence": 0.9}
+        for index, speaker in enumerate((4, 0, 3, 1, 2, 4))
+    ]}]}]}}
+    turns = diarization._deepgram_turns(payload)
+    assert [turn.speaker_id for turn in turns] == ["4", "0", "3", "1", "2", "4"]
+    client = FakeSupabaseClient()
+    rows = [
+        {**_row(index, index * 1000, index * 1000 + 500, f"word{index}"), "speaker_label": turn.stable_label, "provider_speaker_id": turn.speaker_id}
+        for index, turn in enumerate(turns)
+    ]
+    attached = _attach_participants_to_transcript_rows(client, meeting_id="meeting-id", rows=rows)
+    assert len(client.participants.rows) == 5
+    assert attached[0]["participant_id"] == attached[5]["participant_id"]
+    assert {row["metadata"]["provider_speaker_id"] for row in client.participants.rows} == {"0", "1", "2", "3", "4"}

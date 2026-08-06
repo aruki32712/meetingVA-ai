@@ -1,4 +1,7 @@
+import io
 import logging
+import wave
+from collections import Counter, defaultdict
 from dataclasses import dataclass
 from typing import Any
 
@@ -66,6 +69,79 @@ def _deepgram_units(payload: dict[str, Any]) -> tuple[list[DiarizedTurn], str]:
     return (word_units, "results.channels[*].alternatives[*].words[*].speaker") if word_units else (units, "results.utterances[*].speaker")
 
 
+def _deepgram_word_items(payload: dict[str, Any]) -> list[dict[str, Any]]:
+    words: list[dict[str, Any]] = []
+    channels = payload.get("results", {}).get("channels", [])
+    for channel in channels if isinstance(channels, list) else []:
+        alternatives = channel.get("alternatives", []) if isinstance(channel, dict) else []
+        if alternatives and isinstance(alternatives[0], dict):
+            words.extend(
+                word
+                for word in alternatives[0].get("words", []) or []
+                if isinstance(word, dict)
+            )
+    return words
+
+
+def _confidence_filter_comparison(
+    units: list[DiarizedTurn], current_threshold: float
+) -> dict[str, dict[str, int]]:
+    thresholds: dict[str, float | None] = {
+        "current": current_threshold,
+        "lower": current_threshold / 2,
+        "none": None,
+    }
+    return {
+        name: {
+            "remaining_words": sum(
+                threshold is None
+                or unit.confidence is None
+                or unit.confidence >= threshold
+                for unit in units
+            ),
+            "remaining_speakers": len(
+                {
+                    unit.speaker_id
+                    for unit in units
+                    if threshold is None
+                    or unit.confidence is None
+                    or unit.confidence >= threshold
+                }
+            ),
+        }
+        for name, threshold in thresholds.items()
+    }
+
+
+def _safe_audio_metadata(audio_bytes: bytes, content_type: str) -> dict[str, Any]:
+    metadata: dict[str, Any] = {
+        "mime_type": content_type,
+        "channel_count": None,
+        "sample_rate_hz": None,
+        "duration_seconds": None,
+    }
+    if content_type.split(";", 1)[0].casefold() not in {
+        "audio/wav",
+        "audio/wave",
+        "audio/x-wav",
+    }:
+        return metadata
+    try:
+        with wave.open(io.BytesIO(audio_bytes), "rb") as audio:
+            metadata.update(
+                {
+                    "channel_count": audio.getnchannels(),
+                    "sample_rate_hz": audio.getframerate(),
+                    "duration_seconds": round(
+                        audio.getnframes() / max(1, audio.getframerate()), 3
+                    ),
+                }
+            )
+    except (EOFError, wave.Error):
+        pass
+    return metadata
+
+
 def _deepgram_turns(payload: dict[str, Any], *, maximum_gap_ms: int = 750) -> list[DiarizedTurn]:
     units, _ = _deepgram_units(payload)
     turns: list[DiarizedTurn] = []
@@ -96,17 +172,29 @@ async def _diarize_with_deepgram(
     filename: str,
     content_type: str,
     api_key: str,
+    expected_speakers: int | None = None,
 ) -> list[DiarizedTurn]:
     if not api_key:
         raise RuntimeError("Deepgram diarization API key is not configured")
 
     settings = get_settings()
     model = settings.diarization_model
-    logger.info("Sending audio to Deepgram diarization", extra={"audio_filename": filename, "audio_content_type": content_type, "audio_byte_count": len(audio_bytes), "diarization_model": model, "diarization_requested": True})
+    diarize_model = settings.diarization_model_version
+    audio_metadata = _safe_audio_metadata(audio_bytes, content_type)
+    logger.info(
+        "Deepgram diarization request model=%s diarize_model=%s diarize=true utterances=true punctuate=true smart_format=true multichannel=false expected_speakers_diagnostic=%s mime_type=%s channels=%s sample_rate_hz=%s duration_seconds=%s original_audio_preserved=true",
+        model,
+        diarize_model,
+        expected_speakers,
+        audio_metadata["mime_type"],
+        audio_metadata["channel_count"],
+        audio_metadata["sample_rate_hz"],
+        audio_metadata["duration_seconds"],
+    )
     async with httpx.AsyncClient(timeout=180) as client:
         response = await client.post(
             "https://api.deepgram.com/v1/listen",
-            params={"diarize": "true", "utterances": "true", "punctuate": "true", "smart_format": "true", "model": model},
+            params={"diarize": "true", "diarize_model": diarize_model, "utterances": "true", "punctuate": "true", "smart_format": "true", "model": model},
             headers={
                 "Authorization": f"Token {api_key}",
                 "Content-Type": content_type,
@@ -123,11 +211,56 @@ async def _diarize_with_deepgram(
     payload = response.json()
     turns = _deepgram_turns(payload, maximum_gap_ms=settings.diarization_maximum_turn_gap_ms)
     units, response_path = _deepgram_units(payload)
+    word_items = _deepgram_word_items(payload)
     results = payload.get("results", {})
     channels = results.get("channels", []) or []
     paragraphs = sum(len(((channel.get("alternatives") or [{}])[0].get("paragraphs") or {}).get("paragraphs", []) or []) for channel in channels if isinstance(channel, dict))
     utterances = results.get("utterances", []) or []
-    words = sum(len((channel.get("alternatives") or [{}])[0].get("words", []) or []) for channel in channels if isinstance(channel, dict))
+    words = len(word_items)
+    raw_speaker_ids = [
+        str(word["speaker"])
+        for word in word_items
+        if word.get("speaker") is not None
+        and not isinstance(word.get("speaker"), bool)
+    ]
+    word_counts = Counter(raw_speaker_ids)
+    speaking_duration_ms: dict[str, int] = defaultdict(int)
+    for word in word_items:
+        speaker = word.get("speaker")
+        if speaker is None or isinstance(speaker, bool):
+            continue
+        try:
+            speaking_duration_ms[str(speaker)] += max(
+                0, _milliseconds(word.get("end")) - _milliseconds(word.get("start"))
+            )
+        except (TypeError, ValueError):
+            continue
+    missing_speaker_words = words - len(raw_speaker_ids)
+    removed_by_confidence = sum(
+        unit.confidence is not None
+        and unit.confidence < settings.diarization_minimum_confidence
+        for unit in units
+    )
+    confidence_comparison = _confidence_filter_comparison(
+        units, settings.diarization_minimum_confidence
+    )
+    response_metadata = payload.get("metadata", {})
+    logger.info(
+        "Deepgram raw diarization speakers=%s words_per_speaker=%s speaking_duration_ms_per_speaker=%s words_without_speaker=%s words_below_confidence_threshold=%s provider_turns_before_merge=%s provider_turns_after_merge=%s confidence_comparison=%s model=%s diarize_model=%s options=diarize,utterances,punctuate,smart_format response_channels=%s response_duration_seconds=%s response_sample_rate_hz=%s",
+        sorted(set(raw_speaker_ids)),
+        dict(sorted(word_counts.items())),
+        dict(sorted(speaking_duration_ms.items())),
+        missing_speaker_words,
+        removed_by_confidence,
+        len(units),
+        len(turns),
+        confidence_comparison,
+        model,
+        diarize_model,
+        response_metadata.get("channels"),
+        response_metadata.get("duration"),
+        response_metadata.get("sample_rate"),
+    )
     logger.info("Deepgram diarization payload parsed", extra={"deepgram_channel_count": len(channels), "deepgram_paragraph_count": paragraphs, "deepgram_utterance_count": len(utterances), "deepgram_word_count": words, "diarized_turn_count": len(turns), "diarized_unit_count": len(units), "diarized_unique_speaker_ids": sorted({turn.speaker_id for turn in turns}), "diarized_speaker_count": len({turn.speaker_id for turn in turns}), "diarized_first_timestamp_ms": turns[0].start_ms if turns else None, "diarized_last_timestamp_ms": turns[-1].end_ms if turns else None, "deepgram_speaker_response_path": response_path})
     return turns
 
@@ -148,6 +281,7 @@ async def diarize_audio(
     audio_bytes: bytes,
     filename: str,
     content_type: str,
+    expected_speakers: int | None = None,
 ) -> list[DiarizedTurn]:
     settings = get_settings()
     provider = settings.diarization_provider
@@ -163,6 +297,7 @@ async def diarize_audio(
             filename=filename,
             content_type=content_type,
             api_key=api_key,
+            expected_speakers=expected_speakers,
         )
 
     raise RuntimeError(f"Unsupported diarization provider: {provider}")
@@ -172,6 +307,7 @@ async def diarize_audio_safely(
     audio_bytes: bytes,
     filename: str,
     content_type: str,
+    expected_speakers: int | None = None,
 ) -> list[DiarizedTurn]:
     status = diarization_status()
 
@@ -193,7 +329,9 @@ async def diarize_audio_safely(
     )
 
     try:
-        turns = await diarize_audio(audio_bytes, filename, content_type)
+        turns = await diarize_audio(
+            audio_bytes, filename, content_type, expected_speakers
+        )
         logger.info(
             "Hosted speaker diarization completed",
             extra={

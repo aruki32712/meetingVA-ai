@@ -45,6 +45,8 @@ services:
         sync: false
       - key: DIARIZATION_MODEL
         value: nova-3
+      - key: DIARIZATION_MODEL_VERSION
+        value: latest
       - key: DIARIZATION_MAXIMUM_TURN_GAP_MS
         value: "750"
       - key: DIARIZATION_MINIMUM_CONFIDENCE
@@ -112,6 +114,8 @@ services:
         sync: false
       - key: DIARIZATION_MODEL
         value: nova-3
+      - key: DIARIZATION_MODEL_VERSION
+        value: latest
       - key: DIARIZATION_MAXIMUM_TURN_GAP_MS
         value: "750"
       - key: DIARIZATION_MINIMUM_CONFIDENCE

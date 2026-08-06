@@ -50,6 +50,7 @@ type Database = {
           source: string | null;
           audio_storage_path: string | null;
           duration_seconds: number | null;
+          expected_speaker_count: number | null;
           summary: string | null;
           brief: string | null;
           summary_translated: string | null;
@@ -75,6 +76,7 @@ type Database = {
           source?: string | null;
           audio_storage_path?: string | null;
           duration_seconds?: number | null;
+          expected_speaker_count?: number | null;
           summary?: string | null;
           brief?: string | null;
           summary_translated?: string | null;
@@ -100,6 +102,7 @@ type Database = {
           source?: string | null;
           audio_storage_path?: string | null;
           duration_seconds?: number | null;
+          expected_speaker_count?: number | null;
           summary?: string | null;
           brief?: string | null;
           summary_translated?: string | null;

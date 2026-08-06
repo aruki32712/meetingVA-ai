@@ -4,7 +4,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { createBrowserSupabaseClient } from "@/lib/supabase";
-import { formatDate, formatDuration } from "./meeting-utils";
+import { countDetectedSpeakers, formatDate, formatDuration } from "./meeting-utils";
 import {
   completeMeetingDeletion,
   isMeetingDeletionConfirmed,
@@ -1295,11 +1295,12 @@ export function MeetingDetail({ meetingId }: { meetingId: string }) {
         totalSpeakingMs > 0 ? Math.round((speakingMs / totalSpeakingMs) * 100) : 0
     };
   });
-  const detectedSpeakerCount = speakerStats.filter(
-    (speaker) =>
-      speaker.speaker_label && speaker.speaker_label !== "Unknown Speaker"
-  ).length;
-  const displayedSpeakerCount = detectedSpeakerCount || (speakerStats.length ? 1 : 0);
+  const detectedSpeakerCount = countDetectedSpeakers(
+    speakerStats.map((speaker) => speaker.speaker_label)
+  );
+  const hasUnassignedSpeech = speakerStats.some(
+    (speaker) => speaker.speaker_label === "Unknown Speaker"
+  );
   const processingTimeline = buildProcessingTimeline(meeting, processingEvents);
   const latestTranscriptionEvent = [...processingEvents]
     .reverse()
@@ -1620,11 +1621,13 @@ export function MeetingDetail({ meetingId }: { meetingId: string }) {
             <h3 className="text-base font-semibold text-ink">Speakers</h3>
             <p className="mt-1 text-sm text-slate-600">
               {speakerStats.length > 0
-                ? `${displayedSpeakerCount} speaker${displayedSpeakerCount === 1 ? "" : "s"} identified`
+                ? `${detectedSpeakerCount} speaker${detectedSpeakerCount === 1 ? "" : "s"} detected`
                 : "No speakers have been identified yet."}
             </p>
-            {speakerStats.length === 1 && speakerStats[0]?.speaker_label === "Unknown Speaker" ? (
-              <p className="mt-1 text-xs font-medium text-amber-700">Speaker separation unavailable</p>
+            {hasUnassignedSpeech ? (
+              <p className="mt-1 text-xs font-medium text-amber-700">
+                Some speech could not be assigned to a speaker
+              </p>
             ) : null}
           </div>
         </div>

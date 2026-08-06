@@ -2047,7 +2047,7 @@ async def _run_transcribe_meeting_job(
 
     meeting_response = (
         service_client.table("meetings")
-        .select("id,title,audio_storage_path,duration_seconds")
+        .select("id,title,audio_storage_path,duration_seconds,expected_speaker_count")
         .eq("id", meeting_id)
         .limit(1)
         .execute()
@@ -2110,6 +2110,7 @@ async def _run_transcribe_meeting_job(
             audio_bytes,
             filename,
             content_type,
+            meeting.get("expected_speaker_count"),
         )
         word_rows = _build_word_timestamp_rows(
             meeting_id,

@@ -1,4 +1,5 @@
 from functools import lru_cache
+from typing import Literal
 
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -19,6 +20,7 @@ class Settings(BaseSettings):
     diarization_provider: str = "none"
     diarization_api_key: str = ""
     diarization_model: str = "nova-3"
+    diarization_model_version: Literal["latest", "v1", "v2"] = "latest"
     diarization_maximum_turn_gap_ms: int = Field(default=750, ge=0, le=10000)
     diarization_minimum_confidence: float = Field(default=0.5, ge=0, le=1)
     diarization_minimum_timestamp_overlap: float = Field(default=0.5, ge=0, le=1)

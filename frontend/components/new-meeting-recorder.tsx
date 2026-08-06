@@ -3,7 +3,11 @@
 import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { createBrowserSupabaseClient } from "@/lib/supabase";
-import { formatDuration, getTodayInputValue } from "./meeting-utils";
+import {
+  formatDuration,
+  getTodayInputValue,
+  parseExpectedSpeakerCount
+} from "./meeting-utils";
 
 type RecordingStatus =
   | "idle"
@@ -51,6 +55,8 @@ export function NewMeetingRecorder() {
   const [title, setTitle] = useState("");
   const [meetingDate, setMeetingDate] = useState(getTodayInputValue());
   const [description, setDescription] = useState("");
+  const [expectedSpeakerChoice, setExpectedSpeakerChoice] = useState("auto");
+  const [customExpectedSpeakers, setCustomExpectedSpeakers] = useState("");
   const [recordingStatus, setRecordingStatus] =
     useState<RecordingStatus>("idle");
   const [recordingError, setRecordingError] = useState("");
@@ -340,6 +346,20 @@ export function NewMeetingRecorder() {
       return;
     }
 
+    let expectedSpeakerCount: number | null;
+    try {
+      expectedSpeakerCount = parseExpectedSpeakerCount(
+        expectedSpeakerChoice === "custom"
+          ? customExpectedSpeakers
+          : expectedSpeakerChoice
+      );
+    } catch (error) {
+      setSaveError(
+        error instanceof Error ? error.message : "Invalid expected speaker count."
+      );
+      return;
+    }
+
     setIsSaving(true);
     setUploadProgress(5);
 
@@ -390,6 +410,7 @@ export function NewMeetingRecorder() {
           scheduled_at: `${meetingDate}T00:00:00.000Z`,
           audio_storage_path: storagePath,
           duration_seconds: elapsedSeconds,
+          expected_speaker_count: expectedSpeakerCount,
           status: "completed",
           source: "browser_recording"
         })
@@ -521,6 +542,37 @@ export function NewMeetingRecorder() {
               placeholder="Optional notes about the meeting"
             />
           </label>
+
+          <label className="grid gap-2 text-sm font-medium text-ink">
+            Expected number of speakers
+            <select
+              className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm outline-none transition focus:border-signal focus:ring-2 focus:ring-blue-100"
+              value={expectedSpeakerChoice}
+              onChange={(event) => setExpectedSpeakerChoice(event.target.value)}
+            >
+              <option value="auto">Auto-detect (default)</option>
+              {Array.from({ length: 9 }, (_, index) => index + 2).map((count) => (
+                <option key={count} value={count}>{count}</option>
+              ))}
+              <option value="custom">Custom</option>
+            </select>
+          </label>
+          {expectedSpeakerChoice === "custom" ? (
+            <label className="grid gap-2 text-sm font-medium text-ink">
+              Custom speaker count
+              <input
+                className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm outline-none transition focus:border-signal focus:ring-2 focus:ring-blue-100"
+                type="number"
+                min={1}
+                max={20}
+                value={customExpectedSpeakers}
+                onChange={(event) => setCustomExpectedSpeakers(event.target.value)}
+              />
+            </label>
+          ) : null}
+          <p className="text-xs leading-5 text-slate-500">
+            Stored for diagnostics. Deepgram still auto-detects speakers because its prerecorded API does not accept a speaker-count hint.
+          </p>
 
         </div>
       </section>
