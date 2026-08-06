@@ -379,13 +379,18 @@ def _normalize_word_speaker_label(
     return label
 
 
-def _word_grouping_identity(word: dict[str, Any]) -> tuple[str, str | int]:
+def _word_grouping_identity(word: dict[str, Any]) -> tuple[str, str, str | int]:
     provider_speaker_id = _normalize_provider_speaker_id(
         word.get("provider_speaker_id")
     )
+    turn_identity: str | int = (
+        str(word["diarization_turn_id"])
+        if word.get("diarization_turn_id")
+        else int(word.get("diarization_boundary_index") or 0)
+    )
     if provider_speaker_id is not None:
-        return ("provider", provider_speaker_id)
-    return ("unknown", int(word.get("diarization_boundary_index") or 0))
+        return ("provider", provider_speaker_id, turn_identity)
+    return ("unknown", "anonymous", turn_identity)
 
 
 def build_speaker_turn_rows(
@@ -417,6 +422,7 @@ def build_speaker_turn_rows(
                 word.get("speaker_label"), provider_speaker_id
             ),
             "provider_speaker_id": provider_speaker_id,
+            "diarization_turn_id": word.get("diarization_turn_id"),
             "_grouping_identity": _word_grouping_identity(word),
             "start_ms": int(word.get("start_ms") or 0),
             "end_ms": int(word.get("end_ms") or 0),
@@ -617,7 +623,7 @@ def _align_and_build_speaker_turn_rows(
     unknown_run_count = 0
     longest_unknown_word_run = 0
     current_unknown_run = 0
-    previous_unknown_identity: tuple[str, str | int] | None = None
+    previous_unknown_identity: tuple[str, str, str | int] | None = None
     previous_unknown_end_ms: int | None = None
     for word in aligned_words:
         identity = _word_grouping_identity(word)
@@ -655,6 +661,32 @@ def _align_and_build_speaker_turn_rows(
         unknown_turn_count,
         longest_unknown_word_run,
         unknown_run_count,
+    )
+    anonymous_provider_turns = {
+        turn.turn_id
+        for turn in diarized_turns
+        if turn.speaker_id is None and turn.turn_id is not None
+    }
+    logger.info(
+        "diarization boundary preservation raw_provider_turn_count=%s raw_utterance_count=%s raw_speaker_id_count=%s anonymous_turn_count=%s final_transcript_turn_count=%s number_of_boundaries_preserved_without_speaker_id=%s",
+        len(diarized_turns),
+        len(
+            {
+                turn.turn_id.rsplit(":", 1)[0]
+                for turn in diarized_turns
+                if turn.boundary_source == "utterance" and turn.turn_id
+            }
+        ),
+        len(
+            {
+                turn.speaker_id
+                for turn in diarized_turns
+                if turn.speaker_id is not None
+            }
+        ),
+        len(anonymous_provider_turns),
+        len(grouped_rows),
+        len(anonymous_provider_turns),
     )
     return aligned_words, grouped_rows
 
@@ -1583,6 +1615,7 @@ def _attach_participants_to_transcript_rows(
         row.pop("diarization_ambiguous", None)
         row.pop("diarization_available", None)
         row.pop("diarization_boundary_index", None)
+        row.pop("diarization_turn_id", None)
         row.pop("provider_speaker_id", None)
 
     return rows

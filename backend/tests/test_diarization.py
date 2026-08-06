@@ -230,9 +230,97 @@ def test_deepgram_words_are_collapsed_into_stable_speaker_turns() -> None:
     )
 
     assert turns == [
-        DiarizedTurn("0", 0, 800, 0.9),
-        DiarizedTurn("1", 800, 1200, 0.9),
+        DiarizedTurn("0", 0, 800, 0.9, turn_id="word-turn-1"),
+        DiarizedTurn("1", 800, 1200, 0.9, turn_id="word-turn-2"),
     ]
+
+
+def test_five_anonymous_utterance_turns_produce_five_transcript_rows() -> None:
+    payload = {
+        "results": {
+            "utterances": [
+                {"id": f"turn-{index + 1}", "start": index, "end": index + 1}
+                for index in range(5)
+            ],
+            "channels": [{"alternatives": [{"words": []}]}],
+        }
+    }
+    turns = diarization._deepgram_turns(payload)
+    words = [
+        _row(index, index * 1000, index * 1000 + 800, f"word{index}")
+        for index in range(5)
+    ]
+    aligned = _align_words(words, turns)
+    grouped = build_speaker_turn_rows(aligned)
+    assert len(turns) == 5
+    assert len({turn.turn_id for turn in turns}) == 5
+    assert all(turn.speaker_id is None for turn in turns)
+    assert len(grouped) == 5
+    assert all(row["speaker_label"] is None for row in grouped)
+
+
+def test_nine_unreliable_provider_turns_remain_nine_anonymous_rows() -> None:
+    payload = {
+        "results": {
+            "utterances": [
+                {
+                    "id": f"voice-change-{index + 1}",
+                    "start": index * 2,
+                    "end": index * 2 + 2,
+                    "speaker": index % 5,
+                    "confidence": 0.1,
+                }
+                for index in range(9)
+            ],
+            "channels": [{"alternatives": [{"words": []}]}],
+        }
+    }
+    turns = diarization._deepgram_turns(payload)
+    words = [
+        _row(index, index * 2000, index * 2000 + 1500, f"word{index}")
+        for index in range(9)
+    ]
+    aligned = _align_words(words, turns)
+    grouped = build_speaker_turn_rows(aligned)
+    assert len(grouped) == 9
+    assert all(row["provider_speaker_id"] is None for row in grouped)
+    assert " ".join(row["text"] for row in grouped).split() == [
+        word["text"] for word in words
+    ]
+    assert [row["segment_index"] for row in grouped] == list(range(9))
+
+
+def test_words_merge_inside_one_anonymous_turn_but_not_across_turns() -> None:
+    turns = [
+        DiarizedTurn(None, 0, 2000, turn_id="turn-1", boundary_source="utterance"),
+        DiarizedTurn(None, 2000, 4000, turn_id="turn-2", boundary_source="utterance"),
+    ]
+    words = [
+        _row(index, index * 1000, index * 1000 + 800, f"word{index}")
+        for index in range(4)
+    ]
+    grouped = build_speaker_turn_rows(_align_words(words, turns))
+    assert [row["text"] for row in grouped] == ["word0 word1", "word2 word3"]
+
+
+def test_recurring_stable_speaker_reuses_participant_without_merging_boundaries() -> None:
+    turns = [
+        DiarizedTurn("0", 0, 1000, 0.9, turn_id="turn-1"),
+        DiarizedTurn("1", 1000, 2000, 0.9, turn_id="turn-2"),
+        DiarizedTurn("0", 2000, 3000, 0.9, turn_id="turn-3"),
+    ]
+    words = [
+        _row(index, index * 1000, index * 1000 + 800, f"word{index}")
+        for index in range(3)
+    ]
+    grouped = build_speaker_turn_rows(_align_words(words, turns))
+    client = FakeSupabaseClient()
+    attached = _attach_participants_to_transcript_rows(
+        client, meeting_id="meeting-id", rows=grouped
+    )
+    assert len(attached) == 3
+    assert len(client.participants.rows) == 2
+    assert attached[0]["participant_id"] == attached[2]["participant_id"]
 
 
 def test_deepgram_speaker_zero_is_retained() -> None:
@@ -781,7 +869,7 @@ def test_five_speaker_fixture_creates_five_stable_participants() -> None:
 
 def test_one_provider_speaker_is_reported_honestly() -> None:
     turns = diarization._deepgram_turns({"results": {"utterances": [{"speaker": 0, "start": 0, "end": 1}, {"speaker": 0, "start": 1.1, "end": 2}]}})
-    assert len(turns) == 1
+    assert len(turns) == 2
     assert {turn.speaker_id for turn in turns} == {"0"}
 
 

@@ -14,14 +14,18 @@ logger = logging.getLogger(__name__)
 
 @dataclass(frozen=True, slots=True)
 class DiarizedTurn:
-    speaker_id: str
+    speaker_id: str | None
     start_ms: int
     end_ms: int
     confidence: float | None = None
     provider: str = "deepgram"
+    turn_id: str | None = None
+    boundary_source: str = "word-speaker-run"
 
     @property
-    def stable_label(self) -> str:
+    def stable_label(self) -> str | None:
+        if self.speaker_id is None:
+            return None
         return self.speaker_id if ":" in self.speaker_id else f"{self.provider}:{self.speaker_id}"
 
 
@@ -47,6 +51,35 @@ def _valid_turn(speaker: Any, start: Any, end: Any, confidence: Any) -> Diarized
     if end_ms <= start_ms:
         return None
     return DiarizedTurn(str(speaker), start_ms, end_ms, _optional_confidence(confidence))
+
+
+def _valid_anonymous_turn(
+    speaker: Any,
+    start: Any,
+    end: Any,
+    confidence: Any,
+    turn_id: str,
+) -> DiarizedTurn | None:
+    try:
+        start_ms = _milliseconds(start)
+        end_ms = _milliseconds(end)
+    except (TypeError, ValueError):
+        return None
+    if end_ms <= start_ms:
+        return None
+    speaker_id = (
+        None
+        if speaker is None or isinstance(speaker, bool)
+        else str(speaker)
+    )
+    return DiarizedTurn(
+        speaker_id,
+        start_ms,
+        end_ms,
+        _optional_confidence(confidence),
+        turn_id=turn_id,
+        boundary_source="utterance",
+    )
 
 
 def _deepgram_units(payload: dict[str, Any]) -> tuple[list[DiarizedTurn], str]:
@@ -142,8 +175,22 @@ def _safe_audio_metadata(audio_bytes: bytes, content_type: str) -> dict[str, Any
     return metadata
 
 
-def _deepgram_turns(payload: dict[str, Any], *, maximum_gap_ms: int = 750) -> list[DiarizedTurn]:
-    units, _ = _deepgram_units(payload)
+def _word_speaker_turns(
+    payload: dict[str, Any], *, maximum_gap_ms: int
+) -> list[DiarizedTurn]:
+    units = [
+        turn
+        for word in _deepgram_word_items(payload)
+        if (
+            turn := _valid_turn(
+                word.get("speaker"),
+                word.get("start"),
+                word.get("end"),
+                word.get("speaker_confidence"),
+            )
+        )
+        is not None
+    ]
     turns: list[DiarizedTurn] = []
     confidence_values: list[list[float]] = []
 
@@ -157,13 +204,103 @@ def _deepgram_turns(payload: dict[str, Any], *, maximum_gap_ms: int = 750) -> li
                 start_ms=turns[-1].start_ms,
                 end_ms=max(turns[-1].end_ms, unit.end_ms),
                 confidence=sum(values) / len(values) if values else None,
+                turn_id=turns[-1].turn_id,
             )
             continue
 
         confidence_values.append([unit.confidence] if unit.confidence is not None else [])
-        turns.append(unit)
+        turns.append(
+            DiarizedTurn(
+                unit.speaker_id,
+                unit.start_ms,
+                unit.end_ms,
+                unit.confidence,
+                turn_id=f"word-turn-{len(turns) + 1}",
+            )
+        )
 
     return turns
+
+
+def _deepgram_utterance_turns(payload: dict[str, Any]) -> list[DiarizedTurn]:
+    utterances = payload.get("results", {}).get("utterances", [])
+    return [
+        turn
+        for index, utterance in enumerate(
+            utterances if isinstance(utterances, list) else []
+        )
+        if isinstance(utterance, dict)
+        and (
+            turn := _valid_anonymous_turn(
+                utterance.get("speaker"),
+                utterance.get("start"),
+                utterance.get("end"),
+                utterance.get("confidence"),
+                str(utterance.get("id") or f"utterance-{index + 1}"),
+            )
+        )
+        is not None
+    ]
+
+
+def _deepgram_turns(
+    payload: dict[str, Any], *, maximum_gap_ms: int = 750
+) -> list[DiarizedTurn]:
+    word_turns = _word_speaker_turns(payload, maximum_gap_ms=maximum_gap_ms)
+    utterance_turns = _deepgram_utterance_turns(payload)
+    if not utterance_turns:
+        return word_turns
+
+    provider_turns: list[DiarizedTurn] = []
+    for utterance in utterance_turns:
+        overlapping_word_turns = [
+            turn
+            for turn in word_turns
+            if min(utterance.end_ms, turn.end_ms)
+            > max(utterance.start_ms, turn.start_ms)
+        ]
+        change_points = sorted(
+            {
+                utterance.start_ms,
+                utterance.end_ms,
+                *(
+                    turn.start_ms
+                    for turn in overlapping_word_turns
+                    if utterance.start_ms < turn.start_ms < utterance.end_ms
+                ),
+            }
+        )
+        for piece_index, (start_ms, end_ms) in enumerate(
+            zip(change_points, change_points[1:])
+        ):
+            candidates = [
+                (
+                    max(
+                        0,
+                        min(end_ms, turn.end_ms) - max(start_ms, turn.start_ms),
+                    ),
+                    turn,
+                )
+                for turn in overlapping_word_turns
+            ]
+            best_overlap, best_turn = max(
+                candidates, key=lambda candidate: candidate[0], default=(0, None)
+            )
+            provider_turns.append(
+                DiarizedTurn(
+                    best_turn.speaker_id
+                    if best_turn is not None and best_overlap > 0
+                    else utterance.speaker_id,
+                    start_ms,
+                    end_ms,
+                    best_turn.confidence
+                    if best_turn is not None and best_overlap > 0
+                    else utterance.confidence,
+                    turn_id=f"{utterance.turn_id}:{piece_index + 1}",
+                    boundary_source="utterance",
+                )
+            )
+    return provider_turns
 
 
 async def _diarize_with_deepgram(
@@ -261,7 +398,20 @@ async def _diarize_with_deepgram(
         response_metadata.get("duration"),
         response_metadata.get("sample_rate"),
     )
-    logger.info("Deepgram diarization payload parsed", extra={"deepgram_channel_count": len(channels), "deepgram_paragraph_count": paragraphs, "deepgram_utterance_count": len(utterances), "deepgram_word_count": words, "diarized_turn_count": len(turns), "diarized_unit_count": len(units), "diarized_unique_speaker_ids": sorted({turn.speaker_id for turn in turns}), "diarized_speaker_count": len({turn.speaker_id for turn in turns}), "diarized_first_timestamp_ms": turns[0].start_ms if turns else None, "diarized_last_timestamp_ms": turns[-1].end_ms if turns else None, "deepgram_speaker_response_path": response_path})
+    stable_speaker_ids = sorted(
+        {turn.speaker_id for turn in turns if turn.speaker_id is not None}
+    )
+    anonymous_turn_count = sum(turn.speaker_id is None for turn in turns)
+    logger.info(
+        "Deepgram boundary diagnostics raw_provider_turn_count=%s raw_utterance_count=%s raw_speaker_id_count=%s anonymous_turn_count=%s boundaries_without_speaker_id=%s authoritative_boundary_source=%s",
+        len(turns),
+        len(utterances),
+        len(stable_speaker_ids),
+        anonymous_turn_count,
+        anonymous_turn_count,
+        "utterances" if _deepgram_utterance_turns(payload) else "word-speaker-runs",
+    )
+    logger.info("Deepgram diarization payload parsed", extra={"deepgram_channel_count": len(channels), "deepgram_paragraph_count": paragraphs, "deepgram_utterance_count": len(utterances), "deepgram_word_count": words, "diarized_turn_count": len(turns), "diarized_unit_count": len(units), "diarized_unique_speaker_ids": stable_speaker_ids, "diarized_speaker_count": len(stable_speaker_ids), "diarized_first_timestamp_ms": turns[0].start_ms if turns else None, "diarized_last_timestamp_ms": turns[-1].end_ms if turns else None, "deepgram_speaker_response_path": response_path})
     return turns
 
 
@@ -338,8 +488,8 @@ async def diarize_audio_safely(
                 **status,
                 "diarization_attempted": True,
                 "diarized_turn_count": len(turns),
-                "diarized_speaker_count": len({turn.speaker_id for turn in turns}),
-                "diarized_unique_speaker_ids": sorted({turn.speaker_id for turn in turns}),
+                "diarized_speaker_count": len({turn.speaker_id for turn in turns if turn.speaker_id is not None}),
+                "diarized_unique_speaker_ids": sorted({turn.speaker_id for turn in turns if turn.speaker_id is not None}),
             },
         )
         return turns
@@ -538,8 +688,6 @@ def align_words_to_diarization(
         candidates: list[tuple[int, DiarizedTurn]] = []
 
         for turn in ordered_turns:
-            if turn.confidence is not None and turn.confidence < minimum_confidence:
-                continue
             overlap_ms = max(0, min(end_ms, turn.end_ms) - max(start_ms, turn.start_ms))
             if overlap_ms > 0:
                 candidates.append((overlap_ms, turn))
@@ -560,7 +708,7 @@ def align_words_to_diarization(
                 len({turn.stable_label for turn in midpoint_turns}) > 1
                 or overlapping_speakers
             )
-            if not ambiguous and (
+            if (
                 best_overlap / duration_ms >= minimum_overlap
                 or best_turn.start_ms <= midpoint_ms < best_turn.end_ms
             ):
@@ -569,7 +717,6 @@ def align_words_to_diarization(
             distances = [
                 (min(abs(start_ms - turn.end_ms), abs(end_ms - turn.start_ms)), turn)
                 for turn in ordered_turns
-                if turn.confidence is None or turn.confidence >= minimum_confidence
             ]
             distances.sort(key=lambda item: item[0])
             if distances and distances[0][0] <= nearest_turn_tolerance_ms:
@@ -577,9 +724,27 @@ def align_words_to_diarization(
                 if not tied:
                     selected = distances[0][1]
 
-        aligned["speaker_label"] = selected.stable_label if selected else None
-        aligned["provider_speaker_id"] = selected.speaker_id if selected else None
-        aligned["diarization_confidence"] = selected.confidence if selected else None
+        reliable_identity = (
+            selected is not None
+            and selected.speaker_id is not None
+            and not ambiguous
+            and (
+                selected.confidence is None
+                or selected.confidence >= minimum_confidence
+            )
+        )
+        aligned["speaker_label"] = (
+            selected.stable_label if reliable_identity else None
+        )
+        aligned["provider_speaker_id"] = (
+            selected.speaker_id if reliable_identity else None
+        )
+        aligned["diarization_confidence"] = (
+            selected.confidence if reliable_identity else None
+        )
+        aligned["diarization_turn_id"] = (
+            selected.turn_id if selected is not None else None
+        )
         aligned["diarization_ambiguous"] = ambiguous
         aligned["diarization_available"] = bool(ordered_turns)
         aligned["diarization_boundary_index"] = sum(
