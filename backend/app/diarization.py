@@ -44,6 +44,9 @@ class DiarizedTurn:
     boundary_source: str = "word-speaker-run"
     identity_source: str = "word_provider"
     raw_speaker_ids: tuple[str, ...] = field(default=(), compare=False, repr=False)
+    raw_word_speaker_ids: tuple[str, ...] = field(default=(), compare=False, repr=False)
+    raw_utterance_speaker_ids: tuple[str, ...] = field(default=(), compare=False, repr=False)
+    parsed_turn_speaker_ids: tuple[str, ...] = field(default=(), compare=False, repr=False)
 
     @property
     def stable_label(self) -> str | None:
@@ -129,7 +132,7 @@ def _deepgram_units(payload: dict[str, Any]) -> tuple[list[DiarizedTurn], str]:
             item.get("speaker"),
             item.get("start"),
             item.get("end"),
-            item.get("confidence"),
+            item.get("speaker_confidence"),
             identity_source="utterance_provider",
         )) is not None
     ]
@@ -348,7 +351,7 @@ def _deepgram_utterance_turns(payload: dict[str, Any]) -> list[DiarizedTurn]:
                 utterance.get("speaker"),
                 utterance.get("start"),
                 utterance.get("end"),
-                utterance.get("confidence"),
+                utterance.get("speaker_confidence"),
                 str(utterance.get("id") or f"utterance-{index + 1}"),
             )
         )
@@ -361,11 +364,29 @@ def _deepgram_turns(
 ) -> list[DiarizedTurn]:
     word_turns = _word_speaker_turns(payload, maximum_gap_ms=maximum_gap_ms)
     utterance_turns = _deepgram_utterance_turns(payload)
-    raw_speaker_ids = tuple(
-        _deepgram_raw_speaker_diagnostics(payload)["combined_raw_speaker_ids"]
+    raw_diagnostics = _deepgram_raw_speaker_diagnostics(payload)
+    raw_speaker_ids = tuple(raw_diagnostics["combined_raw_speaker_ids"])
+    raw_word_speaker_ids = tuple(raw_diagnostics["raw_word_speaker_ids"])
+    raw_utterance_speaker_ids = tuple(
+        raw_diagnostics["raw_utterance_speaker_ids"]
     )
+    parsed_turn_speaker_ids = tuple(
+        sorted(
+            {
+                turn.speaker_id
+                for turn in [*word_turns, *utterance_turns]
+                if turn.speaker_id is not None
+            }
+        )
+    )
+    stage_metadata = {
+        "raw_speaker_ids": raw_speaker_ids,
+        "raw_word_speaker_ids": raw_word_speaker_ids,
+        "raw_utterance_speaker_ids": raw_utterance_speaker_ids,
+        "parsed_turn_speaker_ids": parsed_turn_speaker_ids,
+    }
     if not utterance_turns:
-        return [replace(turn, raw_speaker_ids=raw_speaker_ids) for turn in word_turns]
+        return [replace(turn, **stage_metadata) for turn in word_turns]
 
     provider_turns: list[DiarizedTurn] = []
     for utterance in utterance_turns:
@@ -421,7 +442,7 @@ def _deepgram_turns(
                     ),
                 )
             )
-    return [replace(turn, raw_speaker_ids=raw_speaker_ids) for turn in provider_turns]
+    return [replace(turn, **stage_metadata) for turn in provider_turns]
 
 
 async def _diarize_with_deepgram(
@@ -1002,6 +1023,15 @@ def align_words_to_diarization(
         )
         aligned["diarization_raw_speaker_ids"] = (
             list(selected.raw_speaker_ids) if selected is not None else []
+        )
+        aligned["diarization_raw_word_speaker_ids"] = (
+            list(selected.raw_word_speaker_ids) if selected is not None else []
+        )
+        aligned["diarization_raw_utterance_speaker_ids"] = (
+            list(selected.raw_utterance_speaker_ids) if selected is not None else []
+        )
+        aligned["diarization_parsed_turn_speaker_ids"] = (
+            list(selected.parsed_turn_speaker_ids) if selected is not None else []
         )
         aligned["diarization_ambiguous"] = ambiguous
         aligned["diarization_assignment_source"] = (

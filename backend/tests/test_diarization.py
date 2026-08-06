@@ -273,7 +273,7 @@ def test_nine_unreliable_provider_turns_remain_nine_anonymous_rows() -> None:
                     "start": index * 2,
                     "end": index * 2 + 2,
                     "speaker": index % 5,
-                    "confidence": 0.1,
+                    "speaker_confidence": 0.1,
                 }
                 for index in range(9)
             ],
@@ -536,6 +536,10 @@ def test_detected_unknown_detected_creates_at_most_three_participants() -> None:
         "Unknown Speaker",
         "Speaker 2",
     }
+    assert sum(
+        row["metadata"].get("provider_speaker_id") is not None
+        for row in client.participants.rows
+    ) == 2
 
 
 def test_unknown_words_split_on_long_pause_and_keep_all_words() -> None:
@@ -1094,7 +1098,7 @@ def test_word_without_speaker_inherits_containing_utterance_speaker() -> None:
     payload = {
         "results": {
             "utterances": [
-                {"id": "utterance-1", "speaker": 0, "start": 0, "end": 1, "confidence": 0.9}
+                {"id": "utterance-1", "speaker": 0, "start": 0, "end": 1, "confidence": 0.05}
             ],
             "channels": [
                 {"alternatives": [{"words": [{"word": "hello", "start": 0.1, "end": 0.5}]}]}
@@ -1204,7 +1208,7 @@ def test_production_shaped_assignment_keeps_eighteen_boundaries() -> None:
     assert " ".join(row["text"] for row in grouped).split() == [word["text"] for word in words]
 
 
-def test_all_nested_deepgram_speakers_survive_parsing_and_participant_creation() -> None:
+def test_all_nested_deepgram_speakers_survive_parsing_and_participant_creation(caplog) -> None:
     payload = {
         "results": {
             "channels": [
@@ -1220,7 +1224,7 @@ def test_all_nested_deepgram_speakers_survive_parsing_and_participant_creation()
                         },
                         {
                             "words": [
-                                {"word": "two", "speaker": 2, "start": 2.0, "end": 2.4, "speaker_confidence": 0.95}
+                                {"word": "two", "speaker": 2, "start": 2.0, "end": 2.4, "speaker_confidence": 0.95, "confidence": 0.01}
                             ]
                         },
                     ]
@@ -1230,16 +1234,17 @@ def test_all_nested_deepgram_speakers_survive_parsing_and_participant_creation()
                         {
                             "words": [
                                 {"word": "one-c", "speaker": 1, "start": 2.8, "end": 3.2, "speaker_confidence": 0.95},
-                                {"word": "three", "speaker": 3, "start": 3.6, "end": 4.0, "speaker_confidence": 0.95},
+                                {"word": "two-b", "speaker": 2, "start": 3.2, "end": 3.5, "speaker_confidence": 0.95},
+                                {"word": "three", "start": 3.6, "end": 4.0, "confidence": 0.02},
                             ]
                         }
                     ]
                 },
             ],
             "utterances": [
-                {"id": f"utterance-{index + 1}", "speaker": speaker, "start": start, "end": end}
+                {"id": f"utterance-{index + 1}", "speaker": speaker, "start": start, "end": end, "confidence": 0.03 if speaker == 3 else 0.9}
                 for index, (speaker, start, end) in enumerate(
-                    ((0, 0.0, 0.4), (1, 0.4, 0.8), (0, 0.8, 1.2), (1, 1.2, 1.6), (2, 2.0, 2.4), (1, 2.8, 3.2), (3, 3.6, 4.0))
+                    ((0, 0.0, 0.4), (1, 0.4, 0.8), (0, 0.8, 1.2), (1, 1.2, 1.6), (2, 2.0, 2.4), (1, 2.8, 3.2), (2, 3.2, 3.5), (3, 3.6, 4.0))
                 )
             ],
         }
@@ -1249,17 +1254,18 @@ def test_all_nested_deepgram_speakers_survive_parsing_and_participant_creation()
     word_rows = [
         _row(index, round(start * 1000), round(end * 1000), text)
         for index, (text, start, end) in enumerate(
-            (("zero-a", 0.0, 0.4), ("one-a", 0.4, 0.8), ("zero-b", 0.8, 1.2), ("one-b", 1.2, 1.6), ("two", 2.0, 2.4), ("one-c", 2.8, 3.2), ("three", 3.6, 4.0))
+            (("zero-a", 0.0, 0.4), ("one-a", 0.4, 0.8), ("zero-b", 0.8, 1.2), ("one-b", 1.2, 1.6), ("two", 2.0, 2.4), ("one-c", 2.8, 3.2), ("two-b", 3.2, 3.5), ("three", 3.6, 4.0))
         )
     ]
     aligned = _align_words(word_rows, turns)
     grouped = build_speaker_turn_rows(aligned)
     client = FakeSupabaseClient()
-    attached = _attach_participants_to_transcript_rows(
-        client, meeting_id="meeting-id", rows=grouped
-    )
+    with caplog.at_level(logging.INFO):
+        attached = _attach_participants_to_transcript_rows(
+            client, meeting_id="meeting-id", rows=grouped
+        )
 
-    assert diagnostics["raw_word_speaker_ids"] == ["0", "1", "2", "3"]
+    assert diagnostics["raw_word_speaker_ids"] == ["0", "1", "2"]
     assert diagnostics["raw_utterance_speaker_ids"] == ["0", "1", "2", "3"]
     assert diagnostics["combined_raw_speaker_ids"] == ["0", "1", "2", "3"]
     assert {turn.speaker_id for turn in turns} == {"0", "1", "2", "3"}
@@ -1269,8 +1275,34 @@ def test_all_nested_deepgram_speakers_survive_parsing_and_participant_creation()
     ]
     assert attached[1]["participant_id"] == attached[3]["participant_id"] == attached[5]["participant_id"]
     assert [row["speaker_label"] for row in attached] == [
-        "deepgram:0", "deepgram:1", "deepgram:0", "deepgram:1", "deepgram:2", "deepgram:1", "deepgram:3"
+        "deepgram:0", "deepgram:1", "deepgram:0", "deepgram:1", "deepgram:2", "deepgram:1", "deepgram:2", "deepgram:3"
     ]
+    assert "raw_word_speakers=['0', '1', '2']" in caplog.text
+    assert "raw_utterance_speakers=['0', '1', '2', '3']" in caplog.text
+    assert "parsed_turn_speakers=['0', '1', '2', '3']" in caplog.text
+    assert "aligned_word_speakers=['0', '1', '2', '3']" in caplog.text
+    assert "final_turn_speakers=['0', '1', '2', '3']" in caplog.text
+    assert "participant_provider_speakers=['0', '1', '2', '3']" in caplog.text
+    assert "unknown_word_count=0 unknown_turn_count=0" in caplog.text
+
+
+def test_low_transcription_confidence_does_not_erase_word_speaker_identity() -> None:
+    payload = {"results": {"channels": [{"alternatives": [{"words": [
+        {
+            "word": "quiet",
+            "speaker": 3,
+            "start": 0,
+            "end": 0.5,
+            "confidence": 0.01,
+        }
+    ]}]}]}}
+    turns = diarization._deepgram_turns(payload)
+    aligned = _align_words([_row(0, 0, 500, "quiet")], turns)
+
+    assert turns[0].speaker_id == "3"
+    assert turns[0].confidence is None
+    assert aligned[0]["provider_speaker_id"] == "3"
+    assert aligned[0]["speaker_label"] == "deepgram:3"
 
 
 def test_missing_deepgram_speaker_remains_unknown_instead_of_zero() -> None:

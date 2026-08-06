@@ -439,6 +439,19 @@ def build_speaker_turn_rows(
             "diarization_raw_speaker_ids": sorted(
                 {str(value) for value in word.get("diarization_raw_speaker_ids", [])}
             ),
+            "diarization_raw_word_speaker_ids": sorted(
+                {str(value) for value in word.get("diarization_raw_word_speaker_ids", [])}
+            ),
+            "diarization_raw_utterance_speaker_ids": sorted(
+                {str(value) for value in word.get("diarization_raw_utterance_speaker_ids", [])}
+            ),
+            "diarization_parsed_turn_speaker_ids": sorted(
+                {str(value) for value in word.get("diarization_parsed_turn_speaker_ids", [])}
+            ),
+            "diarization_aligned_word_speaker_ids": (
+                [provider_speaker_id] if provider_speaker_id is not None else []
+            ),
+            "source_word_count": 1,
             "segment_index": len(turns),
         }
 
@@ -548,6 +561,28 @@ def build_speaker_turn_rows(
                     for value in word.get("diarization_raw_speaker_ids", [])
                 }
             )
+            for metadata_field in (
+                "diarization_raw_word_speaker_ids",
+                "diarization_raw_utterance_speaker_ids",
+                "diarization_parsed_turn_speaker_ids",
+            ):
+                current[metadata_field] = sorted(
+                    set(current[metadata_field])
+                    | {str(value) for value in word.get(metadata_field, [])}
+                )
+            word_provider_id = _normalize_provider_speaker_id(
+                word.get("provider_speaker_id")
+            )
+            if (
+                word_provider_id is not None
+                and word_provider_id
+                not in current["diarization_aligned_word_speaker_ids"]
+            ):
+                current["diarization_aligned_word_speaker_ids"].append(
+                    word_provider_id
+                )
+                current["diarization_aligned_word_speaker_ids"].sort()
+            current["source_word_count"] += 1
             continue
 
         if same_speaker and word_gap_ms > maximum_word_gap_ms:
@@ -1637,6 +1672,44 @@ def _attach_participants_to_transcript_rows(
         for row in rows
         for value in row.get("diarization_raw_speaker_ids", [])
     }
+    raw_word_speaker_ids = {
+        str(value)
+        for row in rows
+        for value in row.get("diarization_raw_word_speaker_ids", [])
+    }
+    raw_utterance_speaker_ids = {
+        str(value)
+        for row in rows
+        for value in row.get("diarization_raw_utterance_speaker_ids", [])
+    }
+    parsed_turn_speaker_ids = {
+        str(value)
+        for row in rows
+        for value in row.get("diarization_parsed_turn_speaker_ids", [])
+    }
+    aligned_word_speaker_ids = {
+        str(value)
+        for row in rows
+        for value in row.get("diarization_aligned_word_speaker_ids", [])
+    }
+    final_turn_speaker_ids = {
+        provider_id
+        for row in rows
+        if (
+            provider_id := _normalize_provider_speaker_id(
+                row.get("provider_speaker_id")
+            )
+        )
+    }
+    unknown_word_count = sum(
+        int(row.get("source_word_count") or 1)
+        for row in rows
+        if _normalize_provider_speaker_id(row.get("provider_speaker_id")) is None
+    )
+    unknown_turn_count = sum(
+        _normalize_provider_speaker_id(row.get("provider_speaker_id")) is None
+        for row in rows
+    )
 
     for row in rows:
         label = _speaker_label_for_row(row)
@@ -1656,14 +1729,19 @@ def _attach_participants_to_transcript_rows(
     if not labels:
         return rows
 
-    detected_display_names = {
-        label: _fallback_speaker_label(index)
-        for index, label in enumerate(
-            label
-            for label in labels
-            if label_sources[label] == "provider_detected"
+    detected_display_names: dict[str, str] = {}
+    for index, label in enumerate(
+        label
+        for label in labels
+        if label_sources[label] == "provider_detected"
+    ):
+        provider_id = label.split(":", 1)[1] if label.startswith("deepgram:") else ""
+        display_index = (
+            int(provider_id)
+            if provider_id.isdigit() and int(provider_id) >= 0
+            else index
         )
-    }
+        detected_display_names[label] = _fallback_speaker_label(display_index)
     participant_rows = [
         {
             "meeting_id": meeting_id,
@@ -1690,25 +1768,30 @@ def _attach_participants_to_transcript_rows(
         for label in labels
     ]
     created = service_client.table("participants").insert(participant_rows).execute()
-    parsed_speaker_ids = {
-        label.split(":", 1)[1]
-        for label in labels
-        if label.startswith("deepgram:")
-    }
     final_participant_speaker_ids = {
         str(participant.get("metadata", {}).get("provider_speaker_id"))
-        for participant in participant_rows
+        for participant in created.data
         if participant.get("metadata", {}).get("provider_speaker_id") is not None
     }
     log_method = logger.info
-    if raw_speaker_ids != parsed_speaker_ids or parsed_speaker_ids != final_participant_speaker_ids:
+    if not (
+        raw_speaker_ids
+        == parsed_turn_speaker_ids
+        == aligned_word_speaker_ids
+        == final_turn_speaker_ids
+        == final_participant_speaker_ids
+    ):
         log_method = logger.error
     log_method(
-        "Deepgram speaker stage comparison http_raw_unique_speakers=%s parsed_unique_speakers=%s final_provider_turn_speakers=%s final_participant_speakers=%s",
-        sorted(raw_speaker_ids),
-        sorted(parsed_speaker_ids),
-        sorted(parsed_speaker_ids),
+        "Deepgram speaker pipeline raw_word_speakers=%s raw_utterance_speakers=%s parsed_turn_speakers=%s aligned_word_speakers=%s final_turn_speakers=%s participant_provider_speakers=%s unknown_word_count=%s unknown_turn_count=%s",
+        sorted(raw_word_speaker_ids),
+        sorted(raw_utterance_speaker_ids),
+        sorted(parsed_turn_speaker_ids),
+        sorted(aligned_word_speaker_ids),
+        sorted(final_turn_speaker_ids),
         sorted(final_participant_speaker_ids),
+        unknown_word_count,
+        unknown_turn_count,
     )
     participants_by_label = {
         participant["speaker_label"]: participant["id"]
@@ -1728,6 +1811,11 @@ def _attach_participants_to_transcript_rows(
         row.pop("provider_speaker_id", None)
         row.pop("diarization_assignment_sources", None)
         row.pop("diarization_raw_speaker_ids", None)
+        row.pop("diarization_raw_word_speaker_ids", None)
+        row.pop("diarization_raw_utterance_speaker_ids", None)
+        row.pop("diarization_parsed_turn_speaker_ids", None)
+        row.pop("diarization_aligned_word_speaker_ids", None)
+        row.pop("source_word_count", None)
 
     return rows
 
