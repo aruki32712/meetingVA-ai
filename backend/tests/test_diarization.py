@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import httpx
+import pytest
 
 from app import diarization
 from app.diarization import DiarizedTurn, align_transcript_rows_to_turns, align_words_to_diarization
@@ -879,18 +880,78 @@ def test_deepgram_request_enables_diarization_and_sends_original_audio(monkeypat
         observed["query"] = dict(request.url.params)
         observed["content_type"] = request.headers.get("content-type")
         observed["body"] = await request.aread()
-        return httpx.Response(200, json={"results": {"channels": [{"alternatives": [{"words": [{"speaker": 0, "start": 0, "end": 1}]}]}]}})
+        return httpx.Response(200, json={"results": {
+            "utterances": [{"id": "utterance-1", "speaker": 0, "start": 0, "end": 1}],
+            "channels": [{"alternatives": [{"words": [{"speaker": 0, "start": 0, "end": 1}]}]}],
+        }})
     real_client = httpx.AsyncClient
     monkeypatch.setattr(diarization.httpx, "AsyncClient", lambda *args, **kwargs: real_client(*args, transport=httpx.MockTransport(handler), **kwargs))
     monkeypatch.setattr(diarization, "get_settings", lambda: type("Settings", (), {"diarization_model": "nova-3", "diarization_model_version": "latest", "diarization_maximum_turn_gap_ms": 750, "diarization_minimum_confidence": 0.5})())
     turns = asyncio.run(diarization._diarize_with_deepgram(audio_bytes=b"original-audio", filename="recording.webm", content_type="audio/webm", api_key="secret", expected_speakers=5))
-    assert observed["query"] == {"diarize": "true", "diarize_model": "latest", "utterances": "true", "punctuate": "true", "smart_format": "true", "model": "nova-3"}
-    assert "expected_speakers" not in observed["query"]
-    assert "min_speakers" not in observed["query"]
-    assert "max_speakers" not in observed["query"]
+    assert observed["query"] == {"diarize_model": "latest", "utterances": "true", "punctuate": "true", "smart_format": "true", "model": "nova-3"}
+    for unsupported_parameter in (
+        "diarize",
+        "expected_speaker_count",
+        "expected_speakers",
+        "min_speakers",
+        "max_speakers",
+        "num_speakers",
+    ):
+        assert unsupported_parameter not in observed["query"]
     assert observed["content_type"] == "audio/webm"
     assert observed["body"] == b"original-audio"
     assert turns[0].speaker_id == "0"
+    assert turns[0].turn_id == "utterance-1:1"
+
+
+def test_deepgram_400_logs_sanitized_provider_response(monkeypatch, caplog) -> None:
+    async def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            400,
+            text='{"err_code":"INVALID_QUERY","err_msg":"diarize and diarize_model conflict","api_key":"provider-secret"}',
+        )
+
+    real_client = httpx.AsyncClient
+    monkeypatch.setattr(
+        diarization.httpx,
+        "AsyncClient",
+        lambda *args, **kwargs: real_client(
+            *args, transport=httpx.MockTransport(handler), **kwargs
+        ),
+    )
+    monkeypatch.setattr(
+        diarization,
+        "get_settings",
+        lambda: type(
+            "Settings",
+            (),
+            {
+                "diarization_model": "nova-3",
+                "diarization_model_version": "latest",
+                "diarization_maximum_turn_gap_ms": 750,
+                "diarization_minimum_confidence": 0.5,
+            },
+        )(),
+    )
+
+    with caplog.at_level(logging.ERROR), pytest.raises(
+        RuntimeError, match="status 400"
+    ):
+        asyncio.run(
+            diarization._diarize_with_deepgram(
+                audio_bytes=b"original-audio",
+                filename="recording.webm",
+                content_type="audio/webm",
+                api_key="request-secret",
+            )
+        )
+
+    assert "status=400" in caplog.text
+    assert "INVALID_QUERY" in caplog.text
+    assert "diarize and diarize_model conflict" in caplog.text
+    assert "provider-secret" not in caplog.text
+    assert "request-secret" not in caplog.text
+    assert "[REDACTED]" in caplog.text
 
 
 def test_confidence_comparison_preserves_five_raw_speaker_ids() -> None:

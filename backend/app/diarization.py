@@ -1,5 +1,6 @@
 import io
 import logging
+import re
 import wave
 from collections import Counter, defaultdict
 from dataclasses import dataclass
@@ -10,6 +11,23 @@ import httpx
 from app.settings import get_settings
 
 logger = logging.getLogger(__name__)
+
+
+def _sanitize_deepgram_error_response(response_text: str) -> str:
+    """Keep provider diagnostics useful without exposing credentials or URLs."""
+    sanitized = " ".join(response_text.split())
+    sanitized = re.sub(
+        r'(?i)("?(?:authorization|api[_-]?key|access[_-]?token|token)"?\s*[:=]\s*")([^"]*)(")',
+        r"\1[REDACTED]\3",
+        sanitized,
+    )
+    sanitized = re.sub(
+        r"(?i)\b(?:bearer|token)\s+[A-Za-z0-9._~+/=-]+",
+        "[REDACTED_CREDENTIAL]",
+        sanitized,
+    )
+    sanitized = re.sub(r"https?://\S+", "[REDACTED_URL]", sanitized)
+    return sanitized[:2000] or "empty response body"
 
 
 @dataclass(frozen=True, slots=True)
@@ -319,7 +337,7 @@ async def _diarize_with_deepgram(
     diarize_model = settings.diarization_model_version
     audio_metadata = _safe_audio_metadata(audio_bytes, content_type)
     logger.info(
-        "Deepgram diarization request model=%s diarize_model=%s diarize=true utterances=true punctuate=true smart_format=true multichannel=false expected_speakers_diagnostic=%s mime_type=%s channels=%s sample_rate_hz=%s duration_seconds=%s original_audio_preserved=true",
+        "Deepgram diarization request endpoint=prerecorded model=%s diarize_model=%s utterances=true punctuate=true smart_format=true multichannel=false expected_speakers_diagnostic=%s mime_type=%s channels=%s sample_rate_hz=%s duration_seconds=%s original_audio_preserved=true",
         model,
         diarize_model,
         expected_speakers,
@@ -331,7 +349,13 @@ async def _diarize_with_deepgram(
     async with httpx.AsyncClient(timeout=180) as client:
         response = await client.post(
             "https://api.deepgram.com/v1/listen",
-            params={"diarize": "true", "diarize_model": diarize_model, "utterances": "true", "punctuate": "true", "smart_format": "true", "model": model},
+            params={
+                "diarize_model": diarize_model,
+                "utterances": "true",
+                "punctuate": "true",
+                "smart_format": "true",
+                "model": model,
+            },
             headers={
                 "Authorization": f"Token {api_key}",
                 "Content-Type": content_type,
@@ -341,6 +365,11 @@ async def _diarize_with_deepgram(
 
     logger.info("Deepgram diarization response received", extra={"deepgram_http_status": response.status_code, "diarization_model": model})
     if response.status_code >= 400:
+        logger.error(
+            "Deepgram diarization request failed status=%s response=%s",
+            response.status_code,
+            _sanitize_deepgram_error_response(response.text),
+        )
         raise RuntimeError(
             f"Deepgram diarization request failed with status {response.status_code}"
         )
@@ -383,7 +412,7 @@ async def _diarize_with_deepgram(
     )
     response_metadata = payload.get("metadata", {})
     logger.info(
-        "Deepgram raw diarization speakers=%s words_per_speaker=%s speaking_duration_ms_per_speaker=%s words_without_speaker=%s words_below_confidence_threshold=%s provider_turns_before_merge=%s provider_turns_after_merge=%s confidence_comparison=%s model=%s diarize_model=%s options=diarize,utterances,punctuate,smart_format response_channels=%s response_duration_seconds=%s response_sample_rate_hz=%s",
+        "Deepgram raw diarization speakers=%s words_per_speaker=%s speaking_duration_ms_per_speaker=%s words_without_speaker=%s words_below_confidence_threshold=%s provider_turns_before_merge=%s provider_turns_after_merge=%s confidence_comparison=%s model=%s diarize_model=%s options=diarize_model,utterances,punctuate,smart_format response_channels=%s response_duration_seconds=%s response_sample_rate_hz=%s",
         sorted(set(raw_speaker_ids)),
         dict(sorted(word_counts.items())),
         dict(sorted(speaking_duration_ms.items())),
