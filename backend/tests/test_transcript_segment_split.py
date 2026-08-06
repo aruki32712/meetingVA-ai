@@ -44,7 +44,18 @@ class RpcQuery:
         return Response(
             {
                 "segments": [
-                    {"segment_index": index, **part}
+                    {
+                        "id": f"55555555-5555-5555-5555-55555555555{index}",
+                        "meeting_id": MEETING_ID,
+                        "segment_index": 4 + index,
+                        "participant_id": part.get("participant_id"),
+                        "speaker_label": f"Speaker {index + 1}",
+                        "start_ms": 12000 + index * 5000,
+                        "end_ms": 17000 + index * 5000,
+                        "original_text": part["text"],
+                        "translated_text": None,
+                        **part,
+                    }
                     for index, part in enumerate(self.client.rpc_params["p_parts"])
                 ],
                 "participants": [],
@@ -121,6 +132,21 @@ def test_split_segment_into_two_existing_speakers(monkeypatch):
         "Yes, I can handle that.",
     ]
     assert response["analysis_stale"] is True
+    assert response["meeting_id"] == MEETING_ID
+    assert response["original_segment_id"] == SEGMENT_ID
+    assert [segment["segment_index"] for segment in response["segments"]] == [4, 5]
+    assert all(segment["id"] != SEGMENT_ID for segment in response["segments"])
+    assert {
+        "id",
+        "segment_index",
+        "participant_id",
+        "speaker_label",
+        "start_ms",
+        "end_ms",
+        "text",
+        "original_text",
+        "translated_text",
+    } <= response["segments"][0].keys()
 
 
 def test_split_segment_into_three_parts_and_create_new_speaker(monkeypatch):

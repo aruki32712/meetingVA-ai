@@ -41,3 +41,48 @@ export function splitCanBeSaved(
     )
   );
 }
+
+type OrderedTranscriptSegment = {
+  id: string;
+  participant_id: string | null;
+  segment_index: number;
+  start_ms: number;
+  end_ms: number;
+};
+
+export function replaceTranscriptSegment<T extends OrderedTranscriptSegment>(
+  segments: T[],
+  originalSegmentId: string,
+  replacementSegments: T[]
+): T[] {
+  return segments
+    .filter((segment) => segment.id !== originalSegmentId)
+    .concat(replacementSegments)
+    .sort(
+      (left, right) =>
+        left.segment_index - right.segment_index || left.start_ms - right.start_ms
+    );
+}
+
+export function transcriptSpeakerStats(
+  segments: OrderedTranscriptSegment[]
+): Record<string, { segmentCount: number; speakingMs: number }> {
+  return segments.reduce<Record<string, { segmentCount: number; speakingMs: number }>>(
+    (stats, segment) => {
+      if (!segment.participant_id) {
+        return stats;
+      }
+      const current = stats[segment.participant_id] ?? {
+        segmentCount: 0,
+        speakingMs: 0
+      };
+      stats[segment.participant_id] = {
+        segmentCount: current.segmentCount + 1,
+        speakingMs:
+          current.speakingMs + Math.max(0, segment.end_ms - segment.start_ms)
+      };
+      return stats;
+    },
+    {}
+  );
+}

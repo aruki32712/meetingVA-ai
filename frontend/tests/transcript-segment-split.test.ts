@@ -3,7 +3,9 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 import {
   buildTranscriptSplitParts,
+  replaceTranscriptSegment,
   splitCanBeSaved,
+  transcriptSpeakerStats,
   transcriptWordBoundaries
 } from "../components/transcript-segment-split-state.ts";
 
@@ -61,6 +63,46 @@ test("failed requests preserve the original segment because updates occur after 
   );
   assert.ok(handler.indexOf("if (!response.ok)") < handler.indexOf("await refreshMeetingData()"));
   assert.doesNotMatch(handler.slice(0, handler.indexOf("if (!response.ok)")), /setTranscriptSegments/);
+  assert.match(handler, /setSegmentSplitMessage\("Segment split saved\."\)/);
+  assert.ok(
+    handler.indexOf("if (!response.ok)") <
+      handler.indexOf('setSegmentSplitMessage("Segment split saved.")')
+  );
+});
+
+test("successful split immediately replaces the original in segment order", () => {
+  const originalSegment = {
+    id: "original",
+    participant_id: "speaker-1",
+    segment_index: 4,
+    start_ms: 12000,
+    end_ms: 22000
+  };
+  const before = [
+    { ...originalSegment, id: "before", segment_index: 3, start_ms: 8000, end_ms: 12000 },
+    originalSegment,
+    { ...originalSegment, id: "after", segment_index: 6, start_ms: 22000, end_ms: 26000 }
+  ];
+  const replacements = [
+    { ...originalSegment, id: "part-2", participant_id: "speaker-2", segment_index: 5, start_ms: 17500, end_ms: 22000 },
+    { ...originalSegment, id: "part-1", segment_index: 4, start_ms: 12000, end_ms: 17500 }
+  ];
+  const after = replaceTranscriptSegment(before, "original", replacements);
+
+  assert.deepEqual(after.map((segment) => segment.id), ["before", "part-1", "part-2", "after"]);
+  assert.equal(after.length, before.length + 1);
+  assert.equal(after.some((segment) => segment.id === "original"), false);
+});
+
+test("speaker statistics recalculate from the replaced transcript", () => {
+  const stats = transcriptSpeakerStats([
+    { id: "part-1", participant_id: "speaker-1", segment_index: 4, start_ms: 12000, end_ms: 17500 },
+    { id: "part-2", participant_id: "speaker-2", segment_index: 5, start_ms: 17500, end_ms: 22000 },
+    { id: "later", participant_id: "speaker-2", segment_index: 6, start_ms: 23000, end_ms: 25000 }
+  ]);
+
+  assert.deepEqual(stats["speaker-1"], { segmentCount: 1, speakingMs: 5500 });
+  assert.deepEqual(stats["speaker-2"], { segmentCount: 2, speakingMs: 6500 });
 });
 
 test("split editor exposes preview, speaker controls, and keyboard navigation", () => {
@@ -75,4 +117,6 @@ test("split editor exposes preview, speaker controls, and keyboard navigation", 
   assert.match(source, /ArrowLeft/);
   assert.match(source, /ArrowRight/);
   assert.match(source, /Analysis may be outdated because the transcript was edited/);
+  assert.match(source, /analysis_stale: payload\.analysis_stale/);
+  assert.match(source, /transcript-segment-\$\{firstCreatedSegmentId\}/);
 });

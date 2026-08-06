@@ -42,7 +42,9 @@ import {
 } from "./speaker-split-state";
 import {
   buildTranscriptSplitParts,
+  replaceTranscriptSegment,
   splitCanBeSaved,
+  transcriptSpeakerStats,
   transcriptWordBoundaries
 } from "./transcript-segment-split-state";
 
@@ -109,6 +111,14 @@ type Participant = {
   display_name: string;
   speaker_label: string | null;
   created_at: string;
+};
+
+type TranscriptSegmentSplitResponse = {
+  meeting_id: string;
+  original_segment_id: string;
+  segments: TranscriptSegment[];
+  participants?: Participant[];
+  analysis_stale: boolean;
 };
 
 type ActionItem = {
@@ -1418,16 +1428,85 @@ export function MeetingDetail({ meetingId }: { meetingId: string }) {
           })
         }
       );
-      const payload = await response.json().catch(() => null);
+      const payload = (await response.json().catch(() => null)) as
+        | TranscriptSegmentSplitResponse
+        | { detail?: string }
+        | null;
       if (!response.ok) {
-        throw new Error(payload?.detail ?? "Unable to split transcript segment.");
+        throw new Error(
+          payload && "detail" in payload && payload.detail
+            ? payload.detail
+            : "Unable to split transcript segment."
+        );
       }
-      await refreshMeetingData();
+      if (
+        !payload ||
+        !("segments" in payload) ||
+        !Array.isArray(payload.segments) ||
+        payload.segments.length < 2 ||
+        payload.original_segment_id !== segment.id
+      ) {
+        throw new Error(
+          "The saved split did not return updated transcript segments."
+        );
+      }
+      const updatedSegments = replaceTranscriptSegment(
+        transcriptSegments,
+        segment.id,
+        payload.segments
+      );
+      setTranscriptSegments(updatedSegments);
+      setMeeting((current) =>
+        current
+          ? { ...current, analysis_stale: payload.analysis_stale }
+          : current
+      );
+      if (payload.participants?.length) {
+        setParticipants((current) => {
+          const byId = new Map(
+            current.map((participant) => [participant.id, participant])
+          );
+          payload.participants?.forEach((participant) => {
+            byId.set(participant.id, participant);
+          });
+          return [...byId.values()].sort((left, right) =>
+            left.created_at.localeCompare(right.created_at)
+          );
+        });
+      }
+      if (process.env.NODE_ENV === "development") {
+        console.debug("transcript segment split applied", {
+          originalSegmentId: segment.id,
+          returnedSegmentIds: payload.segments.map((item) => item.id),
+          returnedSegmentCount: payload.segments.length,
+          postUpdateLocalTranscriptCount: updatedSegments.length
+        });
+      }
+      try {
+        await refreshMeetingData();
+      } catch (refreshError) {
+        if (process.env.NODE_ENV === "development") {
+          console.warn("split saved but meeting detail refresh failed", {
+            originalSegmentId: segment.id,
+            error:
+              refreshError instanceof Error
+                ? refreshError.message
+                : "Unknown refresh error"
+          });
+        }
+      }
       setSegmentSplitId("");
       setSegmentSplitOffset(null);
       setSegmentSplitAssignments([]);
-      setSegmentSplitMessage("Transcript segment split successfully.");
-      requestAnimationFrame(() => window.scrollTo({ top: scrollPosition }));
+      setSegmentSplitMessage("Segment split saved.");
+      const firstCreatedSegmentId = payload.segments[0]?.id;
+      requestAnimationFrame(() => {
+        const firstCreatedSegment = firstCreatedSegmentId
+          ? document.getElementById(`transcript-segment-${firstCreatedSegmentId}`)
+          : null;
+        firstCreatedSegment?.focus({ preventScroll: true });
+        window.scrollTo({ top: scrollPosition });
+      });
     } catch (splitError) {
       setSpeakerError(
         splitError instanceof Error
@@ -1493,19 +1572,19 @@ export function MeetingDetail({ meetingId }: { meetingId: string }) {
     (sum, segment) => sum + Math.max(0, segment.end_ms - segment.start_ms),
     0
   );
+  const transcriptStatsByParticipant =
+    transcriptSpeakerStats(transcriptSegments);
   const speakerStats = participants.map((participant, index) => {
-    const segments = transcriptSegments.filter(
-      (segment) => segment.participant_id === participant.id
-    );
-    const speakingMs = segments.reduce(
-      (sum, segment) => sum + Math.max(0, segment.end_ms - segment.start_ms),
-      0
-    );
+    const participantStats = transcriptStatsByParticipant[participant.id] ?? {
+      segmentCount: 0,
+      speakingMs: 0
+    };
+    const speakingMs = participantStats.speakingMs;
 
     return {
       ...participant,
       fallbackName: fallbackSpeakerName(index),
-      segmentCount: segments.length,
+      segmentCount: participantStats.segmentCount,
       speakingMs,
       conversationPercent:
         totalSpeakingMs > 0 ? Math.round((speakingMs / totalSpeakingMs) * 100) : 0
@@ -2276,6 +2355,7 @@ export function MeetingDetail({ meetingId }: { meetingId: string }) {
                 className="rounded-lg border border-slate-200 bg-slate-50 p-4"
                 id={`transcript-segment-${segment.id}`}
                 key={segment.id}
+                tabIndex={-1}
               >
                 <div className="flex flex-wrap items-center gap-2 text-xs font-medium text-slate-500">
                   <span>{formatTranscriptTime(segment.start_ms)}</span>

@@ -3279,7 +3279,30 @@ async def split_transcript_segment(
             status_code=500,
             detail="The transcript split did not return a valid result.",
         )
-    return data
+    created_segments = data.get("segments")
+    if not isinstance(created_segments, list) or not created_segments:
+        raise HTTPException(
+            status_code=500,
+            detail="The transcript split did not return the created segments.",
+        )
+    created_segments.sort(
+        key=lambda item: (
+            int(item.get("segment_index", 0)),
+            int(item.get("start_ms", 0)),
+        )
+    )
+    if any(item.get("id") == segment_id for item in created_segments):
+        raise HTTPException(
+            status_code=500,
+            detail="The transcript split returned an invalid segment result.",
+        )
+    return {
+        **data,
+        "meeting_id": meeting_id,
+        "original_segment_id": segment_id,
+        "segments": created_segments,
+        "analysis_stale": bool(data.get("analysis_stale")),
+    }
 
 
 @app.post("/v1/meetings/{meeting_id}/transcript-segments/assign", tags=["speakers"])
