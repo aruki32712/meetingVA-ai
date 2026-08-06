@@ -55,6 +55,7 @@ type Database = {
           brief: string | null;
           summary_translated: string | null;
           brief_translated: string | null;
+          analysis_stale: boolean;
           detected_language: string | null;
           transcript_language: string | null;
           translation_language: string | null;
@@ -81,6 +82,7 @@ type Database = {
           brief?: string | null;
           summary_translated?: string | null;
           brief_translated?: string | null;
+          analysis_stale?: boolean;
           detected_language?: string | null;
           transcript_language?: string | null;
           translation_language?: string | null;
@@ -107,6 +109,7 @@ type Database = {
           brief?: string | null;
           summary_translated?: string | null;
           brief_translated?: string | null;
+          analysis_stale?: boolean;
           detected_language?: string | null;
           transcript_language?: string | null;
           translation_language?: string | null;
@@ -329,6 +332,7 @@ type Database = {
           transcript_kind: TranscriptKind;
           confidence: number | null;
           segment_index: number;
+          edit_metadata: Record<string, unknown>;
           created_at: string;
         };
         Insert: {
@@ -344,6 +348,7 @@ type Database = {
           transcript_kind?: TranscriptKind;
           confidence?: number | null;
           segment_index: number;
+          edit_metadata?: Record<string, unknown>;
           created_at?: string;
         };
         Update: {
@@ -359,6 +364,7 @@ type Database = {
           transcript_kind?: TranscriptKind;
           confidence?: number | null;
           segment_index?: number;
+          edit_metadata?: Record<string, unknown>;
           created_at?: string;
         };
         Relationships: [

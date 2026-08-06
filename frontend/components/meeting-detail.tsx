@@ -40,6 +40,11 @@ import {
   nextAvailableSpeakerName,
   selectedSpeakerTurns
 } from "./speaker-split-state";
+import {
+  buildTranscriptSplitParts,
+  splitCanBeSaved,
+  transcriptWordBoundaries
+} from "./transcript-segment-split-state";
 
 type MeetingDetailRow = {
   id: string;
@@ -54,6 +59,7 @@ type MeetingDetailRow = {
   brief: string | null;
   summary_translated: string | null;
   brief_translated: string | null;
+  analysis_stale: boolean;
   detected_language: string | null;
   transcript_language: string | null;
   translation_language: string | null;
@@ -396,6 +402,13 @@ export function MeetingDetail({ meetingId }: { meetingId: string }) {
     originalParticipantId: string;
     newParticipantId: string;
   } | null>(null);
+  const [segmentSplitId, setSegmentSplitId] = useState("");
+  const [segmentSplitOffset, setSegmentSplitOffset] = useState<number | null>(null);
+  const [segmentSplitAssignments, setSegmentSplitAssignments] = useState<
+    Array<{ participantId: string; displayName: string }>
+  >([]);
+  const [isSplittingSegment, setIsSplittingSegment] = useState(false);
+  const [segmentSplitMessage, setSegmentSplitMessage] = useState("");
 
   const loadMeeting = useCallback(async () => {
     const supabase = createBrowserSupabaseClient();
@@ -408,7 +421,7 @@ export function MeetingDetail({ meetingId }: { meetingId: string }) {
     const { data, error: meetingError } = await supabase
       .from("meetings")
       .select(
-        "id,owner_id,title,description,status,scheduled_at,audio_storage_path,duration_seconds,summary,brief,summary_translated,brief_translated,detected_language,transcript_language,translation_language,translation_status,translate_to_english,transcript_kind,created_at"
+        "id,owner_id,title,description,status,scheduled_at,audio_storage_path,duration_seconds,summary,brief,summary_translated,brief_translated,analysis_stale,detected_language,transcript_language,translation_language,translation_status,translate_to_english,transcript_kind,created_at"
       )
       .eq("id", meetingId)
       .eq("owner_id", userData.user.id)
@@ -1334,6 +1347,98 @@ export function MeetingDetail({ meetingId }: { meetingId: string }) {
     }
   }
 
+  function openSegmentSplit(segment: TranscriptSegment) {
+    setSpeakerError("");
+    setSegmentSplitMessage("");
+    setSegmentSplitId(segment.id);
+    setSegmentSplitOffset(null);
+    setSegmentSplitAssignments([]);
+  }
+
+  function closeSegmentSplit() {
+    if (isSplittingSegment) {
+      return;
+    }
+    setSegmentSplitId("");
+    setSegmentSplitOffset(null);
+    setSegmentSplitAssignments([]);
+  }
+
+  function chooseSegmentSplitBoundary(
+    segment: TranscriptSegment,
+    offset: number
+  ) {
+    const defaultParticipantId =
+      segment.participant_id ??
+      participants.find(
+        (participant) =>
+          participant.speaker_label === "Unknown Speaker" ||
+          participant.display_name === "Unknown Speaker"
+      )?.id ??
+      "";
+    setSegmentSplitOffset(offset);
+    setSegmentSplitAssignments([
+      { participantId: defaultParticipantId, displayName: "" },
+      { participantId: defaultParticipantId, displayName: "" }
+    ]);
+  }
+
+  async function saveSegmentSplit() {
+    const segment = transcriptSegments.find((item) => item.id === segmentSplitId);
+    if (!segment || segmentSplitOffset === null) {
+      return;
+    }
+    const parts = buildTranscriptSplitParts(segment.text, [segmentSplitOffset]);
+    if (!splitCanBeSaved(parts, segmentSplitAssignments)) {
+      setSpeakerError("Choose a valid boundary and speaker for every part.");
+      return;
+    }
+
+    setIsSplittingSegment(true);
+    setSpeakerError("");
+    const scrollPosition = window.scrollY;
+    try {
+      const accessToken = await getAccessToken();
+      const response = await fetch(
+        `${apiBaseUrl}/v1/meetings/${meetingId}/transcript-segments/${segment.id}/split`,
+        {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${accessToken}`,
+            "Content-Type": "application/json"
+          },
+          body: JSON.stringify({
+            parts: parts.map((text, index) => ({
+              text,
+              participant_id:
+                segmentSplitAssignments[index].participantId || null,
+              display_name:
+                segmentSplitAssignments[index].displayName.trim() || null
+            }))
+          })
+        }
+      );
+      const payload = await response.json().catch(() => null);
+      if (!response.ok) {
+        throw new Error(payload?.detail ?? "Unable to split transcript segment.");
+      }
+      await refreshMeetingData();
+      setSegmentSplitId("");
+      setSegmentSplitOffset(null);
+      setSegmentSplitAssignments([]);
+      setSegmentSplitMessage("Transcript segment split successfully.");
+      requestAnimationFrame(() => window.scrollTo({ top: scrollPosition }));
+    } catch (splitError) {
+      setSpeakerError(
+        splitError instanceof Error
+          ? splitError.message
+          : "Unable to split transcript segment."
+      );
+    } finally {
+      setIsSplittingSegment(false);
+    }
+  }
+
   if (isLoading) {
     return (
       <section className="rounded-lg border border-slate-200 bg-white p-6 shadow-sm">
@@ -1415,6 +1520,16 @@ export function MeetingDetail({ meetingId }: { meetingId: string }) {
   const splitTurns = splitParticipantId
     ? selectedSpeakerTurns(transcriptSegments, splitParticipantId)
     : [];
+  const segmentBeingSplit = transcriptSegments.find(
+    (segment) => segment.id === segmentSplitId
+  );
+  const segmentSplitBoundaries = segmentBeingSplit
+    ? transcriptWordBoundaries(segmentBeingSplit.text)
+    : [];
+  const segmentSplitParts =
+    segmentBeingSplit && segmentSplitOffset !== null
+      ? buildTranscriptSplitParts(segmentBeingSplit.text, [segmentSplitOffset])
+      : [];
   const processingTimeline = buildProcessingTimeline(meeting, processingEvents);
   const latestTranscriptionEvent = [...processingEvents]
     .reverse()
@@ -1697,6 +1812,12 @@ export function MeetingDetail({ meetingId }: { meetingId: string }) {
           ) : null}
         </div>
 
+        {meeting.analysis_stale ? (
+          <div className="mt-4 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">
+            Analysis may be outdated because the transcript was edited.
+          </div>
+        ) : null}
+
         {isMeetingAnalyzing ? (
           <div className="mt-5 h-2 overflow-hidden rounded-full bg-slate-200">
             <div className="h-full w-2/3 animate-pulse rounded-full bg-ink" />
@@ -1962,6 +2083,155 @@ export function MeetingDetail({ meetingId }: { meetingId: string }) {
         </div>
       ) : null}
 
+      {segmentBeingSplit ? (
+        <div
+          aria-modal="true"
+          className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/50 p-4"
+          role="dialog"
+        >
+          <div className="max-h-[90vh] w-full max-w-3xl overflow-y-auto rounded-xl bg-white p-6 shadow-xl">
+            <h3 className="text-lg font-semibold text-ink">Split transcript segment</h3>
+            <p className="mt-1 text-sm text-slate-600">
+              Choose the word where the next speaker begins, preview both parts, and assign a speaker to each.
+            </p>
+            <div className="mt-5 rounded-lg border border-slate-200 bg-slate-50 p-4 text-sm leading-7 text-ink">
+              {segmentBeingSplit.text}
+            </div>
+            <div className="mt-4">
+              <p className="text-sm font-medium text-ink">Choose a split boundary</p>
+              <div className="mt-2 flex flex-wrap gap-2">
+                {segmentSplitBoundaries.map((boundary, index) => (
+                  <button
+                    aria-label={`Split before ${boundary.beforeWord}`}
+                    className={`rounded-md border px-3 py-1.5 text-sm font-medium transition ${
+                      segmentSplitOffset === boundary.offset
+                        ? "border-signal bg-blue-50 text-signal ring-2 ring-blue-100"
+                        : "border-slate-300 bg-white text-ink hover:bg-slate-100"
+                    }`}
+                    data-split-boundary
+                    key={`${boundary.offset}-${boundary.beforeWord}`}
+                    type="button"
+                    onClick={() =>
+                      chooseSegmentSplitBoundary(segmentBeingSplit, boundary.offset)
+                    }
+                    onKeyDown={(event) => {
+                      if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") {
+                        return;
+                      }
+                      event.preventDefault();
+                      const buttons = Array.from(
+                        event.currentTarget.parentElement?.querySelectorAll<HTMLButtonElement>(
+                          "button[data-split-boundary]"
+                        ) ?? []
+                      );
+                      const nextIndex = Math.max(
+                        0,
+                        Math.min(
+                          buttons.length - 1,
+                          index + (event.key === "ArrowRight" ? 1 : -1)
+                        )
+                      );
+                      buttons[nextIndex]?.focus();
+                    }}
+                  >
+                    Before “{boundary.beforeWord}”
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {segmentSplitParts.length >= 2 ? (
+              <div className="mt-6 grid gap-4 md:grid-cols-2">
+                {segmentSplitParts.map((part, index) => {
+                  const assignment = segmentSplitAssignments[index] ?? {
+                    participantId: "",
+                    displayName: ""
+                  };
+                  return (
+                    <article className="rounded-lg border border-slate-200 p-4" key={`${index}-${part}`}>
+                      <h4 className="text-sm font-semibold text-ink">Part {index + 1}</h4>
+                      <p className="mt-2 text-sm leading-6 text-slate-700">{part}</p>
+                      <label
+                        className="mt-4 block text-xs font-medium uppercase tracking-wide text-slate-500"
+                        htmlFor={`split-part-speaker-${index}`}
+                      >
+                        Speaker for part {index + 1}
+                      </label>
+                      <select
+                        className="mt-2 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-ink"
+                        id={`split-part-speaker-${index}`}
+                        value={assignment.participantId || "__new__"}
+                        onChange={(event) => {
+                          const value = event.target.value;
+                          setSegmentSplitAssignments((current) =>
+                            current.map((item, itemIndex) =>
+                              itemIndex === index
+                                ? value === "__new__"
+                                  ? {
+                                      participantId: "",
+                                      displayName: nextAvailableSpeakerName(participants)
+                                    }
+                                  : { participantId: value, displayName: "" }
+                                : item
+                            )
+                          );
+                        }}
+                      >
+                        {participants.map((participant, participantIndex) => (
+                          <option key={participant.id} value={participant.id}>
+                            {participant.display_name || fallbackSpeakerName(participantIndex)}
+                          </option>
+                        ))}
+                        <option value="__new__">Create a new speaker…</option>
+                      </select>
+                      {!assignment.participantId ? (
+                        <input
+                          aria-label={`New speaker name for part ${index + 1}`}
+                          className="mt-2 w-full rounded-md border border-slate-300 px-3 py-2 text-sm text-ink"
+                          placeholder="New speaker name"
+                          value={assignment.displayName}
+                          onChange={(event) =>
+                            setSegmentSplitAssignments((current) =>
+                              current.map((item, itemIndex) =>
+                                itemIndex === index
+                                  ? { ...item, displayName: event.target.value }
+                                  : item
+                              )
+                            )
+                          }
+                        />
+                      ) : null}
+                    </article>
+                  );
+                })}
+              </div>
+            ) : null}
+
+            <div className="mt-6 flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
+              <button
+                className="rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-ink hover:bg-slate-100 disabled:opacity-60"
+                type="button"
+                disabled={isSplittingSegment}
+                onClick={closeSegmentSplit}
+              >
+                Cancel
+              </button>
+              <button
+                className="rounded-md bg-signal px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:bg-slate-300"
+                type="button"
+                disabled={
+                  isSplittingSegment ||
+                  !splitCanBeSaved(segmentSplitParts, segmentSplitAssignments)
+                }
+                onClick={() => void saveSegmentSplit()}
+              >
+                {isSplittingSegment ? "Saving split…" : "Save Split"}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
       <section
         className="rounded-lg border border-slate-200 bg-white p-6 shadow-sm"
         id="transcript"
@@ -1993,6 +2263,12 @@ export function MeetingDetail({ meetingId }: { meetingId: string }) {
           </div>
         ) : null}
 
+        {segmentSplitMessage ? (
+          <div className="mt-5 rounded-lg border border-emerald-200 bg-emerald-50 p-4 text-sm text-emerald-800">
+            {segmentSplitMessage}
+          </div>
+        ) : null}
+
         {transcriptSegments.length > 0 ? (
           <div className="mt-5 grid gap-3">
             {transcriptSegments.map((segment) => (
@@ -2012,6 +2288,17 @@ export function MeetingDetail({ meetingId }: { meetingId: string }) {
                 <p className="mt-2 text-sm leading-6 text-ink">
                   {displayedTranscriptText(segment, englishSections.has("transcript"))}
                 </p>
+                <button
+                  className="mt-3 rounded-md border border-slate-300 bg-white px-3 py-1.5 text-sm font-medium text-ink hover:bg-slate-100 disabled:cursor-not-allowed disabled:text-slate-400"
+                  type="button"
+                  disabled={
+                    isSplittingSegment ||
+                    transcriptWordBoundaries(segment.text).length === 0
+                  }
+                  onClick={() => openSegmentSplit(segment)}
+                >
+                  Split segment
+                </button>
                 {participants.length > 1 ? (
                   <div className="mt-3">
                     <label

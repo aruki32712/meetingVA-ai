@@ -131,6 +131,28 @@ class SplitParticipantRequest(BaseModel):
     display_name: str | None = Field(default=None, max_length=120)
 
 
+class SplitTranscriptPartRequest(BaseModel):
+    text: str = Field(min_length=1)
+    participant_id: str | None = None
+    display_name: str | None = Field(default=None, max_length=120)
+
+    @model_validator(mode="after")
+    def validate_speaker_assignment(self) -> "SplitTranscriptPartRequest":
+        self.text = self.text.strip()
+        self.display_name = _coerce_optional_text(self.display_name)
+        if not self.text:
+            raise ValueError("Split parts cannot be empty.")
+        if bool(self.participant_id) == bool(self.display_name):
+            raise ValueError(
+                "Every split part requires exactly one speaker assignment."
+            )
+        return self
+
+
+class SplitTranscriptSegmentRequest(BaseModel):
+    parts: list[SplitTranscriptPartRequest] = Field(min_length=2)
+
+
 class TranscribeMeetingRequest(BaseModel):
     translate_to_english: bool = False
 
@@ -2572,6 +2594,7 @@ async def _run_analyze_meeting_job(
                 {
                     "summary": analysis["executive_summary"],
                     "brief": analysis["meeting_brief"],
+                    "analysis_stale": False,
                 }
             )
             .eq("id", meeting_id)
@@ -3165,6 +3188,98 @@ async def split_participant(
         "segment_ids": unique_segment_ids,
         "updated_segment_count": len(updated.data or []),
     }
+
+
+def _normalize_split_text(value: str) -> str:
+    return " ".join(value.split())
+
+
+@app.post(
+    "/v1/meetings/{meeting_id}/transcript-segments/{segment_id}/split",
+    tags=["speakers"],
+)
+async def split_transcript_segment(
+    meeting_id: str,
+    segment_id: str,
+    payload: SplitTranscriptSegmentRequest,
+    authorization: str | None = Header(default=None),
+) -> dict[str, Any]:
+    meeting_id = _validate_uuid(meeting_id, "meeting_id")
+    segment_id = _validate_uuid(segment_id, "segment_id")
+    token = _require_bearer_token(authorization)
+    service_client = get_supabase_service_client()
+    user_id = _require_user_id(token)
+    _require_owned_meeting(service_client, meeting_id, user_id)
+
+    segment_response = (
+        service_client.table("transcript_segments")
+        .select("id,meeting_id,text")
+        .eq("id", segment_id)
+        .eq("meeting_id", meeting_id)
+        .limit(1)
+        .execute()
+    )
+    segment = segment_response.data[0] if segment_response.data else None
+    if not segment:
+        raise HTTPException(status_code=404, detail="Transcript segment was not found.")
+
+    combined_text = " ".join(part.text for part in payload.parts)
+    if _normalize_split_text(combined_text) != _normalize_split_text(segment["text"]):
+        raise HTTPException(
+            status_code=400,
+            detail="Split parts must reconstruct the original transcript text.",
+        )
+
+    rpc_parts: list[dict[str, Any]] = []
+    for part in payload.parts:
+        participant_id = part.participant_id
+        if participant_id:
+            participant_id = _validate_uuid(participant_id, "participant_id")
+            _require_participant(
+                service_client,
+                meeting_id=meeting_id,
+                participant_id=participant_id,
+            )
+        rpc_parts.append(
+            {
+                "text": part.text,
+                "participant_id": participant_id,
+                "display_name": part.display_name,
+            }
+        )
+
+    try:
+        result = (
+            service_client.rpc(
+                "split_transcript_segment",
+                {
+                    "p_meeting_id": meeting_id,
+                    "p_segment_id": segment_id,
+                    "p_owner_id": user_id,
+                    "p_parts": rpc_parts,
+                },
+            ).execute()
+        )
+    except Exception as exc:
+        logger.exception(
+            "Unable to split transcript segment meeting_id=%s segment_id=%s",
+            meeting_id,
+            segment_id,
+        )
+        raise HTTPException(
+            status_code=409,
+            detail="Unable to split this transcript segment. Please refresh and try again.",
+        ) from exc
+
+    data = result.data
+    if isinstance(data, list):
+        data = data[0] if data else None
+    if not isinstance(data, dict):
+        raise HTTPException(
+            status_code=500,
+            detail="The transcript split did not return a valid result.",
+        )
+    return data
 
 
 @app.post("/v1/meetings/{meeting_id}/transcript-segments/assign", tags=["speakers"])
