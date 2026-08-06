@@ -39,6 +39,7 @@ class DiarizedTurn:
     provider: str = "deepgram"
     turn_id: str | None = None
     boundary_source: str = "word-speaker-run"
+    identity_source: str = "word_provider"
 
     @property
     def stable_label(self) -> str | None:
@@ -58,7 +59,14 @@ def _optional_confidence(value: Any) -> float | None:
     return float(value)
 
 
-def _valid_turn(speaker: Any, start: Any, end: Any, confidence: Any) -> DiarizedTurn | None:
+def _valid_turn(
+    speaker: Any,
+    start: Any,
+    end: Any,
+    confidence: Any,
+    *,
+    identity_source: str = "word_provider",
+) -> DiarizedTurn | None:
     if speaker is None or isinstance(speaker, bool):
         return None
     try:
@@ -68,7 +76,13 @@ def _valid_turn(speaker: Any, start: Any, end: Any, confidence: Any) -> Diarized
         return None
     if end_ms <= start_ms:
         return None
-    return DiarizedTurn(str(speaker), start_ms, end_ms, _optional_confidence(confidence))
+    return DiarizedTurn(
+        str(speaker),
+        start_ms,
+        end_ms,
+        _optional_confidence(confidence),
+        identity_source=identity_source,
+    )
 
 
 def _valid_anonymous_turn(
@@ -97,6 +111,7 @@ def _valid_anonymous_turn(
         _optional_confidence(confidence),
         turn_id=turn_id,
         boundary_source="utterance",
+        identity_source="utterance_provider" if speaker_id is not None else "unknown",
     )
 
 
@@ -105,7 +120,13 @@ def _deepgram_units(payload: dict[str, Any]) -> tuple[list[DiarizedTurn], str]:
     utterances = results.get("utterances", [])
     units = [
         turn for item in utterances if isinstance(item, dict)
-        if (turn := _valid_turn(item.get("speaker"), item.get("start"), item.get("end"), item.get("confidence"))) is not None
+        if (turn := _valid_turn(
+            item.get("speaker"),
+            item.get("start"),
+            item.get("end"),
+            item.get("confidence"),
+            identity_source="utterance_provider",
+        )) is not None
     ]
     channels = results.get("channels", [])
     words: list[Any] = []
@@ -316,6 +337,11 @@ def _deepgram_turns(
                     else utterance.confidence,
                     turn_id=f"{utterance.turn_id}:{piece_index + 1}",
                     boundary_source="utterance",
+                    identity_source=(
+                        best_turn.identity_source
+                        if best_turn is not None and best_overlap > 0
+                        else utterance.identity_source
+                    ),
                 )
             )
     return provider_turns
@@ -723,6 +749,7 @@ def align_words_to_diarization(
 
         candidates.sort(key=lambda item: item[0], reverse=True)
         selected: DiarizedTurn | None = None
+        selected_by_nearest = False
         ambiguous = False
         if candidates:
             best_overlap, best_turn = candidates[0]
@@ -737,11 +764,7 @@ def align_words_to_diarization(
                 len({turn.stable_label for turn in midpoint_turns}) > 1
                 or overlapping_speakers
             )
-            if (
-                best_overlap / duration_ms >= minimum_overlap
-                or best_turn.start_ms <= midpoint_ms < best_turn.end_ms
-            ):
-                selected = best_turn
+            selected = best_turn
         elif nearest_turn_tolerance_ms:
             distances = [
                 (min(abs(start_ms - turn.end_ms), abs(end_ms - turn.start_ms)), turn)
@@ -752,15 +775,33 @@ def align_words_to_diarization(
                 tied = len(distances) > 1 and distances[1][0] == distances[0][0]
                 if not tied:
                     selected = distances[0][1]
+                    selected_by_nearest = True
+
+        overlap_ratio = (
+            candidates[0][0] / duration_ms if candidates else 0.0
+        )
+        overlap_accepted = bool(
+            selected is not None
+            and (
+                selected_by_nearest
+                or overlap_ratio >= minimum_overlap
+                or selected.start_ms <= midpoint_ms < selected.end_ms
+            )
+        )
+        confidence_accepted = bool(
+            selected is not None
+            and (
+                selected.confidence is None
+                or selected.confidence >= minimum_confidence
+            )
+        )
 
         reliable_identity = (
             selected is not None
             and selected.speaker_id is not None
             and not ambiguous
-            and (
-                selected.confidence is None
-                or selected.confidence >= minimum_confidence
-            )
+            and overlap_accepted
+            and confidence_accepted
         )
         aligned["speaker_label"] = (
             selected.stable_label if reliable_identity else None
@@ -775,13 +816,111 @@ def align_words_to_diarization(
             selected.turn_id if selected is not None else None
         )
         aligned["diarization_ambiguous"] = ambiguous
+        aligned["diarization_assignment_source"] = (
+            "nearest_turn"
+            if reliable_identity and selected_by_nearest
+            else selected.identity_source
+            if reliable_identity and selected is not None
+            else "unknown"
+        )
+        aligned["diarization_candidate_speaker_id"] = (
+            selected.speaker_id if selected is not None else None
+        )
+        aligned["diarization_candidate_confidence"] = (
+            selected.confidence if selected is not None else None
+        )
+        aligned["diarization_rejected_by_overlap"] = bool(
+            selected is not None
+            and selected.speaker_id is not None
+            and not overlap_accepted
+            and confidence_accepted
+            and not ambiguous
+        )
+        aligned["diarization_rejected_by_confidence"] = bool(
+            selected is not None
+            and selected.speaker_id is not None
+            and overlap_accepted
+            and not confidence_accepted
+            and not ambiguous
+        )
         aligned["diarization_available"] = bool(ordered_turns)
         aligned["diarization_boundary_index"] = sum(
             turn.start_ms <= midpoint_ms for turn in ordered_turns
         )
         aligned_words.append(aligned)
 
+    _recover_unknown_words_from_neighbors(
+        aligned_words,
+        minimum_confidence=minimum_confidence,
+        tolerance_ms=nearest_turn_tolerance_ms,
+    )
     return aligned_words
+
+
+def _recover_unknown_words_from_neighbors(
+    aligned_words: list[dict[str, Any]],
+    *,
+    minimum_confidence: float,
+    tolerance_ms: int,
+) -> int:
+    """Recover only bounded unknown runs supported by the same provider speaker."""
+    recovered = 0
+    index = 0
+    while index < len(aligned_words):
+        if aligned_words[index].get("provider_speaker_id") is not None:
+            index += 1
+            continue
+        run_start = index
+        while (
+            index + 1 < len(aligned_words)
+            and aligned_words[index + 1].get("provider_speaker_id") is None
+        ):
+            index += 1
+        run_end = index
+        left = aligned_words[run_start - 1] if run_start else None
+        right = (
+            aligned_words[run_end + 1]
+            if run_end + 1 < len(aligned_words)
+            else None
+        )
+        left_id = str(left.get("provider_speaker_id")) if left else None
+        right_id = str(right.get("provider_speaker_id")) if right else None
+        neighbor_confidences = [
+            value
+            for value in (
+                left.get("diarization_confidence") if left else None,
+                right.get("diarization_confidence") if right else None,
+            )
+            if isinstance(value, (int, float)) and not isinstance(value, bool)
+        ]
+        within_distance = bool(
+            left
+            and right
+            and int(aligned_words[run_start].get("start_ms") or 0)
+            - int(left.get("end_ms") or 0)
+            <= tolerance_ms
+            and int(right.get("start_ms") or 0)
+            - int(aligned_words[run_end].get("end_ms") or 0)
+            <= tolerance_ms
+        )
+        safe_run = all(
+            not word.get("diarization_ambiguous")
+            for word in aligned_words[run_start : run_end + 1]
+        )
+        confident = bool(
+            len(neighbor_confidences) == 2
+            and min(neighbor_confidences) >= minimum_confidence
+        )
+        if left_id is not None and left_id == right_id and within_distance and safe_run and confident:
+            for word in aligned_words[run_start : run_end + 1]:
+                word["provider_speaker_id"] = left_id
+                word["speaker_label"] = f"deepgram:{left_id}"
+                word["diarization_confidence"] = min(neighbor_confidences)
+                word["diarization_assignment_source"] = "nearest_turn"
+                word["diarization_recovered_from_neighbors"] = True
+                recovered += 1
+        index += 1
+    return recovered
 
 
 def development_diarization_diagnostics(

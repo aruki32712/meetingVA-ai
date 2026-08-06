@@ -990,3 +990,117 @@ def test_five_raw_provider_ids_are_not_renumbered_by_turn_order() -> None:
     assert len(client.participants.rows) == 5
     assert attached[0]["participant_id"] == attached[5]["participant_id"]
     assert {row["metadata"]["provider_speaker_id"] for row in client.participants.rows} == {"0", "1", "2", "3", "4"}
+
+
+def test_word_without_speaker_inherits_containing_utterance_speaker() -> None:
+    payload = {
+        "results": {
+            "utterances": [
+                {"id": "utterance-1", "speaker": 0, "start": 0, "end": 1, "confidence": 0.9}
+            ],
+            "channels": [
+                {"alternatives": [{"words": [{"word": "hello", "start": 0.1, "end": 0.5}]}]}
+            ],
+        }
+    }
+    turns = diarization._deepgram_turns(payload)
+    aligned = _align_words([_row(0, 100, 500, "hello")], turns)
+
+    assert aligned[0]["provider_speaker_id"] == "0"
+    assert aligned[0]["speaker_label"] == "deepgram:0"
+    assert aligned[0]["diarization_assignment_source"] == "utterance_provider"
+    assert aligned[0]["diarization_turn_id"] == "utterance-1:1"
+
+
+def test_short_unknown_run_between_same_speaker_is_recovered_without_merging_boundaries() -> None:
+    words = [
+        _row(0, 0, 100, "left"),
+        _row(1, 100, 200, "middle"),
+        _row(2, 200, 300, "right"),
+    ]
+    turns = [
+        DiarizedTurn("0", 0, 100, 0.9, turn_id="turn-1"),
+        DiarizedTurn(None, 100, 200, None, turn_id="turn-2", identity_source="unknown"),
+        DiarizedTurn("0", 200, 300, 0.9, turn_id="turn-3"),
+    ]
+    aligned = _align_words(words, turns)
+    grouped = build_speaker_turn_rows(aligned)
+
+    assert [word["provider_speaker_id"] for word in aligned] == ["0", "0", "0"]
+    assert aligned[1]["diarization_assignment_source"] == "nearest_turn"
+    assert len(grouped) == 3
+    assert [row["diarization_turn_id"] for row in grouped] == ["turn-1", "turn-2", "turn-3"]
+
+
+def test_unknown_run_between_different_speakers_stays_unknown() -> None:
+    words = [
+        _row(0, 0, 100, "left"),
+        _row(1, 100, 200, "middle"),
+        _row(2, 200, 300, "right"),
+    ]
+    turns = [
+        DiarizedTurn("0", 0, 100, 0.9, turn_id="turn-1"),
+        DiarizedTurn(None, 100, 200, None, turn_id="turn-2", identity_source="unknown"),
+        DiarizedTurn("1", 200, 300, 0.9, turn_id="turn-3"),
+    ]
+    aligned = _align_words(words, turns)
+
+    assert [word["provider_speaker_id"] for word in aligned] == ["0", None, "1"]
+    assert aligned[1]["diarization_assignment_source"] == "unknown"
+
+
+def test_overlapping_competing_speakers_stay_unknown() -> None:
+    words = [_row(0, 100, 300, "overlap")]
+    aligned = _align_words(
+        words,
+        [
+            DiarizedTurn("0", 0, 300, 0.9, turn_id="turn-1"),
+            DiarizedTurn("1", 100, 400, 0.9, turn_id="turn-2"),
+        ],
+    )
+
+    assert aligned[0]["provider_speaker_id"] is None
+    assert aligned[0]["diarization_ambiguous"] is True
+    assert aligned[0]["diarization_assignment_source"] == "unknown"
+
+
+def test_production_shaped_assignment_keeps_eighteen_boundaries() -> None:
+    speaker_pattern = ["0", None, "1", "1", None, "2", "2", None, "0", "0", None, "1", "1", "2", None, "2", "0", "0"]
+    utterance_derived = {3, 8, 13}
+    words = [
+        _row(index, index * 400, index * 400 + 300, f"word{index}")
+        for index in range(18)
+    ]
+    turns = [
+        DiarizedTurn(
+            speaker,
+            index * 400,
+            index * 400 + 300,
+            0.9 if speaker is not None else None,
+            turn_id=f"turn-{index + 1}",
+            boundary_source="utterance",
+            identity_source=(
+                "utterance_provider"
+                if index in utterance_derived
+                else "word_provider"
+                if speaker is not None
+                else "unknown"
+            ),
+        )
+        for index, speaker in enumerate(speaker_pattern)
+    ]
+    aligned, grouped = _align_and_build_speaker_turn_rows(
+        words,
+        turns,
+        minimum_confidence=0.5,
+        minimum_overlap=0.5,
+        nearest_turn_tolerance_ms=250,
+    )
+
+    assert len(grouped) == 18
+    assert {word["provider_speaker_id"] for word in aligned if word["provider_speaker_id"] is not None} == {"0", "1", "2"}
+    assert sum(word["provider_speaker_id"] is None for word in aligned) == 4
+    assert sum(bool(word.get("diarization_recovered_from_neighbors")) for word in aligned) == 1
+    assert sum(word["diarization_assignment_source"] == "utterance_provider" for word in aligned) == 3
+    assert [row["segment_index"] for row in grouped] == list(range(18))
+    assert " ".join(row["text"] for row in grouped).split() == [word["text"] for word in words]

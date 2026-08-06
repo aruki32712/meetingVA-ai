@@ -4,7 +4,7 @@ import logging
 import mimetypes
 import re
 import time
-from collections import defaultdict, deque
+from collections import Counter, defaultdict, deque
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Literal
@@ -433,6 +433,9 @@ def build_speaker_turn_rows(
             "confidence": confidence,
             "diarization_available": bool(word.get("diarization_available")),
             "diarization_ambiguous": bool(word.get("diarization_ambiguous")),
+            "diarization_assignment_sources": [
+                str(word.get("diarization_assignment_source") or "unknown")
+            ],
             "segment_index": len(turns),
         }
 
@@ -530,6 +533,11 @@ def build_speaker_turn_rows(
                 if confidence_values
                 else None
             )
+            assignment_source = str(
+                word.get("diarization_assignment_source") or "unknown"
+            )
+            if assignment_source not in current["diarization_assignment_sources"]:
+                current["diarization_assignment_sources"].append(assignment_source)
             continue
 
         if same_speaker and word_gap_ms > maximum_word_gap_ms:
@@ -585,6 +593,65 @@ def _align_and_build_speaker_turn_rows(
         minimum_confidence=minimum_confidence,
         minimum_overlap=minimum_overlap,
         nearest_turn_tolerance_ms=nearest_turn_tolerance_ms,
+    )
+    assignment_sources = Counter(
+        str(word.get("diarization_assignment_source") or "unknown")
+        for word in aligned_words
+    )
+    ambiguous_word_count = sum(
+        bool(word.get("diarization_ambiguous")) for word in aligned_words
+    )
+    rejected_by_overlap = sum(
+        bool(word.get("diarization_rejected_by_overlap")) for word in aligned_words
+    )
+    rejected_by_confidence = sum(
+        bool(word.get("diarization_rejected_by_confidence")) for word in aligned_words
+    )
+    current_assignments = sum(
+        word.get("provider_speaker_id") is not None for word in aligned_words
+    )
+    before_confidence_filtering = current_assignments + rejected_by_confidence
+    raw_provider_speaker_count = len(
+        {
+            str(turn.speaker_id)
+            for turn in diarized_turns
+            if turn.speaker_id is not None
+        }
+    )
+    post_filter_speaker_count = len(
+        {
+            str(word["provider_speaker_id"])
+            for word in aligned_words
+            if word.get("provider_speaker_id") is not None
+        }
+    )
+    recovered_neighbor_words = sum(
+        bool(word.get("diarization_recovered_from_neighbors"))
+        for word in aligned_words
+    )
+    unknown_duration_after_ms = sum(
+        max(0, int(word.get("end_ms") or 0) - int(word.get("start_ms") or 0))
+        for word in aligned_words
+        if word.get("provider_speaker_id") is None
+    )
+    recovered_duration_ms = sum(
+        max(0, int(word.get("end_ms") or 0) - int(word.get("start_ms") or 0))
+        for word in aligned_words
+        if word.get("diarization_recovered_from_neighbors")
+    )
+    logger.info(
+        "diarization assignment diagnostics raw_provider_speaker_count=%s post_filter_speaker_count=%s current_assignments=%s assignments_before_confidence_filtering=%s rejected_solely_by_overlap=%s rejected_solely_by_confidence=%s ambiguous_word_count=%s recovered_neighbor_words=%s unknown_duration_before_ms=%s unknown_duration_after_ms=%s assignment_sources=%s",
+        raw_provider_speaker_count,
+        post_filter_speaker_count,
+        current_assignments,
+        before_confidence_filtering,
+        rejected_by_overlap,
+        rejected_by_confidence,
+        ambiguous_word_count,
+        recovered_neighbor_words,
+        unknown_duration_after_ms + recovered_duration_ms,
+        unknown_duration_after_ms,
+        dict(sorted(assignment_sources.items())),
     )
     safe_context = {
         "input_word_row_count": len(aligned_words),
@@ -1554,6 +1621,7 @@ def _attach_participants_to_transcript_rows(
     labels: list[str] = []
     label_sources: dict[str, str] = {}
     label_confidences: dict[str, list[float]] = defaultdict(list)
+    label_assignment_sources: dict[str, set[str]] = defaultdict(set)
 
     for row in rows:
         label = _speaker_label_for_row(row)
@@ -1564,6 +1632,11 @@ def _attach_participants_to_transcript_rows(
         confidence = row.get("diarization_confidence")
         if isinstance(confidence, (int, float)) and not isinstance(confidence, bool):
             label_confidences[label].append(float(confidence))
+        label_assignment_sources[label].update(
+            str(source)
+            for source in row.get("diarization_assignment_sources", [])
+            if source
+        )
 
     if not labels:
         return rows
@@ -1596,6 +1669,7 @@ def _attach_participants_to_transcript_rows(
                 "provider": "deepgram" if label.startswith("deepgram:") else None,
                 "provider_speaker_id": label.split(":", 1)[1] if label.startswith("deepgram:") else None,
                 "confidence": (sum(label_confidences[label]) / len(label_confidences[label])) if label_confidences[label] else None,
+                "assignment_sources": sorted(label_assignment_sources[label]) or ["unknown"],
             },
         }
         for label in labels
@@ -1617,6 +1691,7 @@ def _attach_participants_to_transcript_rows(
         row.pop("diarization_boundary_index", None)
         row.pop("diarization_turn_id", None)
         row.pop("provider_speaker_id", None)
+        row.pop("diarization_assignment_sources", None)
 
     return rows
 
