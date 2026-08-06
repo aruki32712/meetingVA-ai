@@ -21,6 +21,7 @@ class Settings(BaseSettings):
     diarization_api_key: str = ""
     diarization_model: str = "nova-3"
     diarization_model_version: Literal["latest", "v1", "v2"] = "latest"
+    diarization_cost_per_minute_usd: float | None = Field(default=None, ge=0)
     diarization_maximum_turn_gap_ms: int = Field(default=750, ge=0, le=10000)
     diarization_minimum_confidence: float = Field(default=0.5, ge=0, le=1)
     diarization_minimum_timestamp_overlap: float = Field(default=0.5, ge=0, le=1)

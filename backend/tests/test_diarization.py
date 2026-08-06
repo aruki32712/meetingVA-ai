@@ -926,9 +926,24 @@ def test_diarization_model_version_setting_rejects_unknown_value() -> None:
 
 def test_explicit_comparison_runs_each_supported_model_once(monkeypatch) -> None:
     observed: list[str] = []
+    received_kwargs: list[dict] = []
 
     async def fake_diarize(**kwargs):
         observed.append(kwargs["model_version"])
+        received_kwargs.append(kwargs)
+        kwargs["diagnostics"].update(
+            {
+                "http_status": 200,
+                "speaker_count": 1,
+                "unique_raw_speaker_ids": ["0"],
+                "word_count_by_speaker": {"0": 1},
+                "speaking_duration_ms_by_speaker": {"0": 100},
+                "utterance_count": 1,
+                "unknown_word_count": 0,
+                "elapsed_ms": 10,
+                "estimated_provider_cost_usd": None,
+            }
+        )
         return [DiarizedTurn("0", 0, 100, 0.9)]
 
     monkeypatch.setattr(diarization, "_diarize_with_deepgram", fake_diarize)
@@ -942,8 +957,100 @@ def test_explicit_comparison_runs_each_supported_model_once(monkeypatch) -> None
     )
 
     assert observed == ["latest", "v2", "v1"]
-    assert [summary["model_version"] for summary in summaries] == observed
-    assert all(summary["request_status"] == 200 for summary in summaries)
+    assert [summary["model"] for summary in summaries] == observed
+    assert all(summary["http_status"] == 200 for summary in summaries)
+    assert all("service_client" not in kwargs for kwargs in received_kwargs)
+    assert all("meeting_id" not in kwargs for kwargs in received_kwargs)
+
+
+def test_comparison_marks_best_speaker_separation_for_fixture(monkeypatch) -> None:
+    speaker_counts = {"latest": 3, "v2": 4, "v1": 2}
+
+    async def fake_diarize(**kwargs):
+        count = speaker_counts[kwargs["model_version"]]
+        kwargs["diagnostics"].update(
+            {
+                "http_status": 200,
+                "speaker_count": count,
+                "unique_raw_speaker_ids": [str(index) for index in range(count)],
+                "unknown_word_count": 1,
+                "elapsed_ms": 10,
+            }
+        )
+        return []
+
+    monkeypatch.setattr(diarization, "_diarize_with_deepgram", fake_diarize)
+    summaries = asyncio.run(
+        diarization.compare_deepgram_diarization_models(
+            audio_bytes=b"audio",
+            filename="recording.webm",
+            content_type="audio/webm",
+            api_key="secret",
+        )
+    )
+
+    assert [
+        summary["model"]
+        for summary in summaries
+        if summary["best_speaker_separation"]
+    ] == ["v2"]
+
+
+def test_comparison_uses_same_audio_and_does_not_log_secrets_or_transcript(monkeypatch, caplog) -> None:
+    requests: list[tuple[bytes, str | None]] = []
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        requests.append((await request.aread(), request.headers.get("content-type")))
+        return httpx.Response(200, json={
+            "metadata": {"duration": 60},
+            "results": {
+                "utterances": [{"speaker": 0, "start": 0, "end": 1}],
+                "channels": [{"alternatives": [{"words": [{
+                    "word": "PRIVATE_TRANSCRIPT_CONTENT",
+                    "speaker": 0,
+                    "start": 0,
+                    "end": 1,
+                }]}]}],
+            },
+        })
+
+    real_client = httpx.AsyncClient
+    monkeypatch.setattr(
+        diarization.httpx,
+        "AsyncClient",
+        lambda *args, **kwargs: real_client(
+            *args, transport=httpx.MockTransport(handler), **kwargs
+        ),
+    )
+    monkeypatch.setattr(
+        diarization,
+        "get_settings",
+        lambda: type("Settings", (), {
+            "diarization_model": "nova-3",
+            "diarization_model_version": "latest",
+            "diarization_maximum_turn_gap_ms": 750,
+            "diarization_minimum_confidence": 0.5,
+            "diarization_cost_per_minute_usd": 0.01,
+        })(),
+    )
+
+    with caplog.at_level(logging.INFO):
+        summaries = asyncio.run(
+            diarization.compare_deepgram_diarization_models(
+                audio_bytes=b"same-original-audio",
+                filename="recording.webm",
+                content_type="audio/webm",
+                api_key="PRIVATE_API_KEY",
+            )
+        )
+
+    assert requests == [(b"same-original-audio", "audio/webm")] * 3
+    assert all(summary["speaker_count"] == 1 for summary in summaries)
+    assert all(summary["utterance_count"] == 1 for summary in summaries)
+    assert all(summary["word_count_by_speaker"] == {"0": 1} for summary in summaries)
+    assert all(summary["estimated_provider_cost_usd"] == 0.01 for summary in summaries)
+    assert "PRIVATE_API_KEY" not in caplog.text
+    assert "PRIVATE_TRANSCRIPT_CONTENT" not in caplog.text
 
 
 def test_safe_wav_audio_diagnostics_include_format_and_peak() -> None:

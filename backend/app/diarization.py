@@ -453,6 +453,7 @@ async def _diarize_with_deepgram(
     api_key: str,
     expected_speakers: int | None = None,
     model_version: str | None = None,
+    diagnostics: dict[str, Any] | None = None,
 ) -> list[DiarizedTurn]:
     if not api_key:
         raise RuntimeError("Deepgram diarization API key is not configured")
@@ -496,6 +497,15 @@ async def _diarize_with_deepgram(
         )
 
     processing_duration_ms = round((time.perf_counter() - request_started) * 1000)
+    if diagnostics is not None:
+        diagnostics.update(
+            {
+                "provider": "deepgram",
+                "model": diarize_model,
+                "http_status": response.status_code,
+                "elapsed_ms": processing_duration_ms,
+            }
+        )
     logger.info(
         "Deepgram diarization response model_version=%s request_status=%s processing_duration_ms=%s",
         diarize_model,
@@ -563,6 +573,34 @@ async def _diarize_with_deepgram(
         units, settings.diarization_minimum_confidence
     )
     response_metadata = payload.get("metadata", {})
+    provider_duration_seconds = response_metadata.get("duration")
+    if not isinstance(provider_duration_seconds, (int, float)):
+        provider_duration_seconds = audio_metadata.get("duration_seconds")
+    cost_per_minute = getattr(settings, "diarization_cost_per_minute_usd", None)
+    estimated_cost_usd = (
+        round(float(provider_duration_seconds) / 60 * float(cost_per_minute), 6)
+        if isinstance(provider_duration_seconds, (int, float))
+        and isinstance(cost_per_minute, (int, float))
+        else None
+    )
+    if diagnostics is not None:
+        diagnostics.update(
+            {
+                "unique_raw_speaker_ids": raw_diagnostics[
+                    "combined_raw_speaker_ids"
+                ],
+                "speaker_count": len(
+                    raw_diagnostics["combined_raw_speaker_ids"]
+                ),
+                "word_count_by_speaker": dict(sorted(word_counts.items())),
+                "speaking_duration_ms_by_speaker": dict(
+                    sorted(speaking_duration_ms.items())
+                ),
+                "utterance_count": len(utterances),
+                "unknown_word_count": missing_speaker_words,
+                "estimated_provider_cost_usd": estimated_cost_usd,
+            }
+        )
     logger.info(
         "Deepgram raw speaker diagnostics raw_word_speaker_ids=%s raw_utterance_speaker_ids=%s combined_raw_speaker_ids=%s word_count_by_speaker=%s utterance_count_by_speaker=%s speaking_duration_ms_per_speaker=%s words_without_speaker=%s words_below_confidence_threshold=%s provider_turns_before_merge=%s provider_turns_after_merge=%s confidence_comparison=%s model=%s diarize_model=%s options=diarize_model,utterances,punctuate,smart_format response_channels=%s response_duration_seconds=%s response_sample_rate_hz=%s",
         raw_diagnostics["raw_word_speaker_ids"],
@@ -640,39 +678,58 @@ async def compare_deepgram_diarization_models(
     summaries: list[dict[str, Any]] = []
     for model_version in ("latest", "v2", "v1"):
         started = time.perf_counter()
+        diagnostics: dict[str, Any] = {
+            "provider": "deepgram",
+            "model": model_version,
+            "http_status": None,
+            "unique_raw_speaker_ids": [],
+            "speaker_count": 0,
+            "word_count_by_speaker": {},
+            "speaking_duration_ms_by_speaker": {},
+            "utterance_count": 0,
+            "unknown_word_count": 0,
+            "estimated_provider_cost_usd": None,
+        }
         try:
-            turns = await _diarize_with_deepgram(
+            await _diarize_with_deepgram(
                 audio_bytes=audio_bytes,
                 filename=filename,
                 content_type=content_type,
                 api_key=api_key,
                 model_version=model_version,
+                diagnostics=diagnostics,
             )
-            summaries.append(
-                {
-                    "model_version": model_version,
-                    "request_status": 200,
-                    "processing_duration_ms": round(
-                        (time.perf_counter() - started) * 1000
-                    ),
-                    "raw_unique_speaker_ids": sorted(
-                        {turn.speaker_id for turn in turns if turn.speaker_id is not None}
-                    ),
-                    "provider_turn_count": len(turns),
-                }
-            )
+            summaries.append(diagnostics)
         except Exception as exc:
             match = re.search(r"status (\d{3})", str(exc))
-            summaries.append(
-                {
-                    "model_version": model_version,
-                    "request_status": int(match.group(1)) if match else None,
-                    "processing_duration_ms": round(
-                        (time.perf_counter() - started) * 1000
-                    ),
-                    "error": type(exc).__name__,
-                }
+            if diagnostics["http_status"] is None and match:
+                diagnostics["http_status"] = int(match.group(1))
+            diagnostics.setdefault(
+                "elapsed_ms", round((time.perf_counter() - started) * 1000)
             )
+            diagnostics["error"] = type(exc).__name__
+            summaries.append(diagnostics)
+    successful = [summary for summary in summaries if summary["http_status"] == 200]
+    best_score = max(
+        (
+            (
+                int(summary["speaker_count"]),
+                -int(summary["unknown_word_count"]),
+            )
+            for summary in successful
+        ),
+        default=None,
+    )
+    for summary in summaries:
+        summary["best_speaker_separation"] = bool(
+            best_score is not None
+            and summary["http_status"] == 200
+            and (
+                int(summary["speaker_count"]),
+                -int(summary["unknown_word_count"]),
+            )
+            == best_score
+        )
     return summaries
 
 

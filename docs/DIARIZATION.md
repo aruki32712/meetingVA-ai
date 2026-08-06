@@ -44,6 +44,42 @@ The command makes three provider requests and logs only model version, response
 status, duration, speaker IDs/counts, utterance counts, and safe audio metadata.
 It is not exposed through the user-facing API or frontend.
 
+Each run reuses the exact original file bytes and detected MIME type. The command
+does not connect to Supabase, create transcript rows or participants, enqueue
+jobs, or modify the meeting. If Deepgram no longer supports `v1`, that comparison
+is retained as a compact failed result with its HTTP status rather than affecting
+the supported model results.
+
+The JSON output includes unique raw speakers, words and speaking milliseconds by
+speaker, utterance and unknown-word counts, HTTP status, and elapsed time. Set the
+optional `DIARIZATION_COST_PER_MINUTE_USD` from the organization's current
+Deepgram contract to include an estimate; MeetingVA does not hardcode pricing.
+For example:
+
+```json
+[
+  {
+    "provider": "deepgram",
+    "model": "latest",
+    "http_status": 200,
+    "speaker_count": 3,
+    "unique_raw_speaker_ids": ["0", "1", "2"],
+    "utterance_count": 17,
+    "unknown_word_count": 12,
+    "elapsed_ms": 98000,
+    "estimated_provider_cost_usd": null,
+    "best_speaker_separation": true
+  }
+]
+```
+
+The harness marks the successful result with the highest speaker count and then
+the fewest unknown words as `best_speaker_separation`; ties remain visible.
+Review the speaker-duration distribution before adopting a result. A model can
+be called the best separator for a recording only
+after this command has been run on that consented recording; unit-test fixtures
+are not evidence about production audio.
+
 MeetingVA preserves the uploaded sample rate and channel layout. Deepgram's
 `multichannel=true` mode is appropriate only when separate input channels
 actually contain separate speakers. It is not interchangeable with diarization
