@@ -6,7 +6,7 @@ import time
 import wave
 from array import array
 from collections import Counter, defaultdict
-from dataclasses import dataclass
+from dataclasses import dataclass, field, replace
 from typing import Any
 
 import httpx
@@ -43,6 +43,7 @@ class DiarizedTurn:
     turn_id: str | None = None
     boundary_source: str = "word-speaker-run"
     identity_source: str = "word_provider"
+    raw_speaker_ids: tuple[str, ...] = field(default=(), compare=False, repr=False)
 
     @property
     def stable_label(self) -> str | None:
@@ -121,6 +122,7 @@ def _valid_anonymous_turn(
 def _deepgram_units(payload: dict[str, Any]) -> tuple[list[DiarizedTurn], str]:
     results = payload.get("results", {})
     utterances = results.get("utterances", [])
+    utterances = utterances if isinstance(utterances, list) else []
     units = [
         turn for item in utterances if isinstance(item, dict)
         if (turn := _valid_turn(
@@ -131,12 +133,7 @@ def _deepgram_units(payload: dict[str, Any]) -> tuple[list[DiarizedTurn], str]:
             identity_source="utterance_provider",
         )) is not None
     ]
-    channels = results.get("channels", [])
-    words: list[Any] = []
-    for channel in channels if isinstance(channels, list) else []:
-        alternatives = channel.get("alternatives", []) if isinstance(channel, dict) else []
-        if alternatives and isinstance(alternatives[0], dict):
-            words.extend(alternatives[0].get("words", []) or [])
+    words = _deepgram_word_items(payload)
     word_units = [
         turn for word in words if isinstance(word, dict)
         if (turn := _valid_turn(word.get("speaker"), word.get("start"), word.get("end"), word.get("speaker_confidence"))) is not None
@@ -149,13 +146,48 @@ def _deepgram_word_items(payload: dict[str, Any]) -> list[dict[str, Any]]:
     channels = payload.get("results", {}).get("channels", [])
     for channel in channels if isinstance(channels, list) else []:
         alternatives = channel.get("alternatives", []) if isinstance(channel, dict) else []
-        if alternatives and isinstance(alternatives[0], dict):
+        alternatives = alternatives if isinstance(alternatives, list) else []
+        for alternative in alternatives:
+            if not isinstance(alternative, dict):
+                continue
+            alternative_words = alternative.get("words", []) or []
+            if not isinstance(alternative_words, list):
+                continue
             words.extend(
                 word
-                for word in alternatives[0].get("words", []) or []
+                for word in alternative_words
                 if isinstance(word, dict)
             )
     return words
+
+
+def _deepgram_raw_speaker_diagnostics(payload: dict[str, Any]) -> dict[str, Any]:
+    word_speaker_ids = [
+        str(word["speaker"])
+        for word in _deepgram_word_items(payload)
+        if word.get("speaker") is not None
+        and not isinstance(word.get("speaker"), bool)
+    ]
+    utterances = payload.get("results", {}).get("utterances", [])
+    utterances = utterances if isinstance(utterances, list) else []
+    utterance_speaker_ids = [
+        str(utterance["speaker"])
+        for utterance in utterances
+        if isinstance(utterance, dict)
+        and utterance.get("speaker") is not None
+        and not isinstance(utterance.get("speaker"), bool)
+    ]
+    return {
+        "raw_word_speaker_ids": sorted(set(word_speaker_ids)),
+        "raw_utterance_speaker_ids": sorted(set(utterance_speaker_ids)),
+        "combined_raw_speaker_ids": sorted(
+            set(word_speaker_ids) | set(utterance_speaker_ids)
+        ),
+        "word_count_by_speaker": dict(sorted(Counter(word_speaker_ids).items())),
+        "utterance_count_by_speaker": dict(
+            sorted(Counter(utterance_speaker_ids).items())
+        ),
+    }
 
 
 def _confidence_filter_comparison(
@@ -329,8 +361,11 @@ def _deepgram_turns(
 ) -> list[DiarizedTurn]:
     word_turns = _word_speaker_turns(payload, maximum_gap_ms=maximum_gap_ms)
     utterance_turns = _deepgram_utterance_turns(payload)
+    raw_speaker_ids = tuple(
+        _deepgram_raw_speaker_diagnostics(payload)["combined_raw_speaker_ids"]
+    )
     if not utterance_turns:
-        return word_turns
+        return [replace(turn, raw_speaker_ids=raw_speaker_ids) for turn in word_turns]
 
     provider_turns: list[DiarizedTurn] = []
     for utterance in utterance_turns:
@@ -386,7 +421,7 @@ def _deepgram_turns(
                     ),
                 )
             )
-    return provider_turns
+    return [replace(turn, raw_speaker_ids=raw_speaker_ids) for turn in provider_turns]
 
 
 async def _diarize_with_deepgram(
@@ -462,16 +497,30 @@ async def _diarize_with_deepgram(
     word_items = _deepgram_word_items(payload)
     results = payload.get("results", {})
     channels = results.get("channels", []) or []
-    paragraphs = sum(len(((channel.get("alternatives") or [{}])[0].get("paragraphs") or {}).get("paragraphs", []) or []) for channel in channels if isinstance(channel, dict))
+    paragraphs = sum(
+        len((alternative.get("paragraphs") or {}).get("paragraphs", []) or [])
+        for channel in channels
+        if isinstance(channel, dict)
+        for alternative in channel.get("alternatives", []) or []
+        if isinstance(alternative, dict)
+    )
     utterances = results.get("utterances", []) or []
     words = len(word_items)
-    raw_speaker_ids = [
+    raw_word_speaker_ids = [
         str(word["speaker"])
         for word in word_items
         if word.get("speaker") is not None
         and not isinstance(word.get("speaker"), bool)
     ]
-    word_counts = Counter(raw_speaker_ids)
+    raw_diagnostics = _deepgram_raw_speaker_diagnostics(payload)
+    raw_utterance_speaker_ids = [
+        str(utterance["speaker"])
+        for utterance in utterances
+        if isinstance(utterance, dict)
+        and utterance.get("speaker") is not None
+        and not isinstance(utterance.get("speaker"), bool)
+    ]
+    word_counts = Counter(raw_word_speaker_ids)
     speaking_duration_ms: dict[str, int] = defaultdict(int)
     for word in word_items:
         speaker = word.get("speaker")
@@ -483,7 +532,7 @@ async def _diarize_with_deepgram(
             )
         except (TypeError, ValueError):
             continue
-    missing_speaker_words = words - len(raw_speaker_ids)
+    missing_speaker_words = words - len(raw_word_speaker_ids)
     removed_by_confidence = sum(
         unit.confidence is not None
         and unit.confidence < settings.diarization_minimum_confidence
@@ -494,9 +543,12 @@ async def _diarize_with_deepgram(
     )
     response_metadata = payload.get("metadata", {})
     logger.info(
-        "Deepgram raw diarization speakers=%s words_per_speaker=%s speaking_duration_ms_per_speaker=%s words_without_speaker=%s words_below_confidence_threshold=%s provider_turns_before_merge=%s provider_turns_after_merge=%s confidence_comparison=%s model=%s diarize_model=%s options=diarize_model,utterances,punctuate,smart_format response_channels=%s response_duration_seconds=%s response_sample_rate_hz=%s",
-        sorted(set(raw_speaker_ids)),
+        "Deepgram raw speaker diagnostics raw_word_speaker_ids=%s raw_utterance_speaker_ids=%s combined_raw_speaker_ids=%s word_count_by_speaker=%s utterance_count_by_speaker=%s speaking_duration_ms_per_speaker=%s words_without_speaker=%s words_below_confidence_threshold=%s provider_turns_before_merge=%s provider_turns_after_merge=%s confidence_comparison=%s model=%s diarize_model=%s options=diarize_model,utterances,punctuate,smart_format response_channels=%s response_duration_seconds=%s response_sample_rate_hz=%s",
+        raw_diagnostics["raw_word_speaker_ids"],
+        raw_diagnostics["raw_utterance_speaker_ids"],
+        raw_diagnostics["combined_raw_speaker_ids"],
         dict(sorted(word_counts.items())),
+        dict(sorted(Counter(raw_utterance_speaker_ids).items())),
         dict(sorted(speaking_duration_ms.items())),
         missing_speaker_words,
         removed_by_confidence,
@@ -509,7 +561,35 @@ async def _diarize_with_deepgram(
         response_metadata.get("duration"),
         response_metadata.get("sample_rate"),
     )
-    if len(set(raw_speaker_ids)) == 1:
+    parsed_speaker_ids = sorted(
+        {
+            unit.speaker_id
+            for unit in [
+                *_word_speaker_turns(
+                    payload,
+                    maximum_gap_ms=settings.diarization_maximum_turn_gap_ms,
+                ),
+                *_deepgram_utterance_turns(payload),
+            ]
+            if unit.speaker_id is not None
+        }
+    )
+    final_turn_speaker_ids = sorted(
+        {turn.speaker_id for turn in turns if turn.speaker_id is not None}
+    )
+    comparison_log = logger.info
+    if (
+        raw_diagnostics["combined_raw_speaker_ids"] != parsed_speaker_ids
+        or parsed_speaker_ids != final_turn_speaker_ids
+    ):
+        comparison_log = logger.error
+    comparison_log(
+        "Deepgram parser comparison http_raw_unique_speakers=%s parsed_unique_speakers=%s final_provider_turn_speakers=%s",
+        raw_diagnostics["combined_raw_speaker_ids"],
+        parsed_speaker_ids,
+        final_turn_speaker_ids,
+    )
+    if len(raw_diagnostics["combined_raw_speaker_ids"]) == 1:
         logger.info("The diarization provider classified this recording as one speaker.")
     stable_speaker_ids = sorted(
         {turn.speaker_id for turn in turns if turn.speaker_id is not None}
@@ -919,6 +999,9 @@ def align_words_to_diarization(
         )
         aligned["diarization_turn_id"] = (
             selected.turn_id if selected is not None else None
+        )
+        aligned["diarization_raw_speaker_ids"] = (
+            list(selected.raw_speaker_ids) if selected is not None else []
         )
         aligned["diarization_ambiguous"] = ambiguous
         aligned["diarization_assignment_source"] = (

@@ -995,6 +995,11 @@ def test_single_provider_speaker_emits_clear_diagnostic(monkeypatch, caplog) -> 
         ))
 
     assert "The diarization provider classified this recording as one speaker." in caplog.text
+    assert "raw_word_speaker_ids=['0']" in caplog.text
+    assert "raw_utterance_speaker_ids=['0']" in caplog.text
+    assert "combined_raw_speaker_ids=['0']" in caplog.text
+    assert "word_count_by_speaker={'0': 2}" in caplog.text
+    assert "utterance_count_by_speaker={'0': 1}" in caplog.text
 
 
 def test_deepgram_400_logs_sanitized_provider_response(monkeypatch, caplog) -> None:
@@ -1197,3 +1202,98 @@ def test_production_shaped_assignment_keeps_eighteen_boundaries() -> None:
     assert sum(word["diarization_assignment_source"] == "utterance_provider" for word in aligned) == 3
     assert [row["segment_index"] for row in grouped] == list(range(18))
     assert " ".join(row["text"] for row in grouped).split() == [word["text"] for word in words]
+
+
+def test_all_nested_deepgram_speakers_survive_parsing_and_participant_creation() -> None:
+    payload = {
+        "results": {
+            "channels": [
+                {
+                    "alternatives": [
+                        {
+                            "words": [
+                                {"word": "zero-a", "speaker": 0, "start": 0.0, "end": 0.4, "speaker_confidence": 0.95},
+                                {"word": "one-a", "speaker": 1, "start": 0.4, "end": 0.8, "speaker_confidence": 0.95},
+                                {"word": "zero-b", "speaker": 0, "start": 0.8, "end": 1.2, "speaker_confidence": 0.95},
+                                {"word": "one-b", "speaker": 1, "start": 1.2, "end": 1.6, "speaker_confidence": 0.95},
+                            ]
+                        },
+                        {
+                            "words": [
+                                {"word": "two", "speaker": 2, "start": 2.0, "end": 2.4, "speaker_confidence": 0.95}
+                            ]
+                        },
+                    ]
+                },
+                {
+                    "alternatives": [
+                        {
+                            "words": [
+                                {"word": "one-c", "speaker": 1, "start": 2.8, "end": 3.2, "speaker_confidence": 0.95},
+                                {"word": "three", "speaker": 3, "start": 3.6, "end": 4.0, "speaker_confidence": 0.95},
+                            ]
+                        }
+                    ]
+                },
+            ],
+            "utterances": [
+                {"id": f"utterance-{index + 1}", "speaker": speaker, "start": start, "end": end}
+                for index, (speaker, start, end) in enumerate(
+                    ((0, 0.0, 0.4), (1, 0.4, 0.8), (0, 0.8, 1.2), (1, 1.2, 1.6), (2, 2.0, 2.4), (1, 2.8, 3.2), (3, 3.6, 4.0))
+                )
+            ],
+        }
+    }
+    diagnostics = diarization._deepgram_raw_speaker_diagnostics(payload)
+    turns = diarization._deepgram_turns(payload)
+    word_rows = [
+        _row(index, round(start * 1000), round(end * 1000), text)
+        for index, (text, start, end) in enumerate(
+            (("zero-a", 0.0, 0.4), ("one-a", 0.4, 0.8), ("zero-b", 0.8, 1.2), ("one-b", 1.2, 1.6), ("two", 2.0, 2.4), ("one-c", 2.8, 3.2), ("three", 3.6, 4.0))
+        )
+    ]
+    aligned = _align_words(word_rows, turns)
+    grouped = build_speaker_turn_rows(aligned)
+    client = FakeSupabaseClient()
+    attached = _attach_participants_to_transcript_rows(
+        client, meeting_id="meeting-id", rows=grouped
+    )
+
+    assert diagnostics["raw_word_speaker_ids"] == ["0", "1", "2", "3"]
+    assert diagnostics["raw_utterance_speaker_ids"] == ["0", "1", "2", "3"]
+    assert diagnostics["combined_raw_speaker_ids"] == ["0", "1", "2", "3"]
+    assert {turn.speaker_id for turn in turns} == {"0", "1", "2", "3"}
+    assert len(client.participants.rows) == 4
+    assert [row["display_name"] for row in client.participants.rows] == [
+        "Speaker 1", "Speaker 2", "Speaker 3", "Speaker 4"
+    ]
+    assert attached[1]["participant_id"] == attached[3]["participant_id"] == attached[5]["participant_id"]
+    assert [row["speaker_label"] for row in attached] == [
+        "deepgram:0", "deepgram:1", "deepgram:0", "deepgram:1", "deepgram:2", "deepgram:1", "deepgram:3"
+    ]
+
+
+def test_missing_deepgram_speaker_remains_unknown_instead_of_zero() -> None:
+    payload = {
+        "results": {
+            "channels": [{"alternatives": [{"words": [{"word": "unknown", "start": 0, "end": 0.5}]}]}],
+            "utterances": [{"id": "utterance-1", "start": 0, "end": 0.5}],
+        }
+    }
+    turns = diarization._deepgram_turns(payload)
+    aligned = _align_words([_row(0, 0, 500, "unknown")], turns)
+
+    assert turns[0].speaker_id is None
+    assert aligned[0]["provider_speaker_id"] is None
+    assert aligned[0]["speaker_label"] is None
+
+
+def test_turn_merging_never_changes_any_of_four_speaker_identities() -> None:
+    payload = {"results": {"channels": [{"alternatives": [{"words": [
+        {"speaker": speaker, "start": index * 0.4, "end": index * 0.4 + 0.3}
+        for index, speaker in enumerate((0, 0, 1, 1, 2, 2, 3, 3))
+    ]}]}]}}
+    turns = diarization._deepgram_turns(payload)
+
+    assert [turn.speaker_id for turn in turns] == ["0", "1", "2", "3"]
+    assert {turn.speaker_id for turn in turns} == {"0", "1", "2", "3"}

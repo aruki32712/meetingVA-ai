@@ -436,6 +436,9 @@ def build_speaker_turn_rows(
             "diarization_assignment_sources": [
                 str(word.get("diarization_assignment_source") or "unknown")
             ],
+            "diarization_raw_speaker_ids": sorted(
+                {str(value) for value in word.get("diarization_raw_speaker_ids", [])}
+            ),
             "segment_index": len(turns),
         }
 
@@ -538,6 +541,13 @@ def build_speaker_turn_rows(
             )
             if assignment_source not in current["diarization_assignment_sources"]:
                 current["diarization_assignment_sources"].append(assignment_source)
+            current["diarization_raw_speaker_ids"] = sorted(
+                set(current["diarization_raw_speaker_ids"])
+                | {
+                    str(value)
+                    for value in word.get("diarization_raw_speaker_ids", [])
+                }
+            )
             continue
 
         if same_speaker and word_gap_ms > maximum_word_gap_ms:
@@ -1622,6 +1632,11 @@ def _attach_participants_to_transcript_rows(
     label_sources: dict[str, str] = {}
     label_confidences: dict[str, list[float]] = defaultdict(list)
     label_assignment_sources: dict[str, set[str]] = defaultdict(set)
+    raw_speaker_ids = {
+        str(value)
+        for row in rows
+        for value in row.get("diarization_raw_speaker_ids", [])
+    }
 
     for row in rows:
         label = _speaker_label_for_row(row)
@@ -1675,6 +1690,26 @@ def _attach_participants_to_transcript_rows(
         for label in labels
     ]
     created = service_client.table("participants").insert(participant_rows).execute()
+    parsed_speaker_ids = {
+        label.split(":", 1)[1]
+        for label in labels
+        if label.startswith("deepgram:")
+    }
+    final_participant_speaker_ids = {
+        str(participant.get("metadata", {}).get("provider_speaker_id"))
+        for participant in participant_rows
+        if participant.get("metadata", {}).get("provider_speaker_id") is not None
+    }
+    log_method = logger.info
+    if raw_speaker_ids != parsed_speaker_ids or parsed_speaker_ids != final_participant_speaker_ids:
+        log_method = logger.error
+    log_method(
+        "Deepgram speaker stage comparison http_raw_unique_speakers=%s parsed_unique_speakers=%s final_provider_turn_speakers=%s final_participant_speakers=%s",
+        sorted(raw_speaker_ids),
+        sorted(parsed_speaker_ids),
+        sorted(parsed_speaker_ids),
+        sorted(final_participant_speaker_ids),
+    )
     participants_by_label = {
         participant["speaker_label"]: participant["id"]
         for participant in created.data
@@ -1692,6 +1727,7 @@ def _attach_participants_to_transcript_rows(
         row.pop("diarization_turn_id", None)
         row.pop("provider_speaker_id", None)
         row.pop("diarization_assignment_sources", None)
+        row.pop("diarization_raw_speaker_ids", None)
 
     return rows
 
