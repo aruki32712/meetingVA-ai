@@ -460,30 +460,24 @@ def build_speaker_turn_rows(
             and within_size
             and unambiguous
         )
-        if adjacent_pair_count < 20:
+        if adjacent_pair_count < 10:
             logger.info(
-                "speaker turn adjacent word pair",
-                extra={
-                    "left_provider_speaker_id": current.get(
-                        "provider_speaker_id"
-                    ),
-                    "right_provider_speaker_id": word.get(
-                        "provider_speaker_id"
-                    ),
-                    "left_speaker_label": current.get("speaker_label"),
-                    "right_speaker_label": word.get("speaker_label"),
-                    "pause_ms": word_gap_ms,
-                    "same_provider": current.get("provider_speaker_id")
-                    == word.get("provider_speaker_id"),
-                    "same_label": current.get("speaker_label")
-                    == word.get("speaker_label"),
-                    "ambiguous": not unambiguous,
-                    "same_kind": compatible_kind,
-                    "within_pause": word_gap_ms <= maximum_word_gap_ms,
-                    "within_duration": within_duration,
-                    "within_characters": within_size,
-                    "can_merge": can_merge,
-                },
+                "speaker pair index=%s left_provider=%s right_provider=%s left_label=%s right_label=%s pause_ms=%s same_provider=%s same_label=%s ambiguous=%s same_kind=%s within_pause=%s within_duration=%s within_characters=%s can_merge=%s",
+                adjacent_pair_count,
+                current.get("provider_speaker_id"),
+                word.get("provider_speaker_id"),
+                current.get("speaker_label"),
+                word.get("speaker_label"),
+                word_gap_ms,
+                current.get("provider_speaker_id")
+                == word.get("provider_speaker_id"),
+                current.get("speaker_label") == word.get("speaker_label"),
+                not unambiguous,
+                compatible_kind,
+                word_gap_ms <= maximum_word_gap_ms,
+                within_duration,
+                within_size,
+                can_merge,
             )
         adjacent_pair_count += 1
         if can_merge:
@@ -570,14 +564,16 @@ def _align_and_build_speaker_turn_rows(
             {str(word["speaker_label"]) for word in aligned_words if word.get("speaker_label")}
         ),
     }
-    logger.info("speaker turn grouping input", extra=safe_context)
     grouped_rows = build_speaker_turn_rows(
         aligned_words,
         diagnostics=diagnostics,
     )
     logger.info(
-        "speaker turn grouping",
-        extra={**safe_context, "output_turn_row_count": len(grouped_rows)},
+        "speaker turn grouping input_word_count=%s output_turn_count=%s unique_provider_speakers=%s unique_labels=%s",
+        len(aligned_words),
+        len(grouped_rows),
+        safe_context["unique_provider_speaker_ids"],
+        safe_context["unique_speaker_labels"],
     )
     return aligned_words, grouped_rows
 

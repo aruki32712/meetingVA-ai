@@ -470,12 +470,12 @@ def test_fifty_consecutive_provider_words_become_one_turn(caplog) -> None:
     pair_records = [
         record
         for record in caplog.records
-        if record.message == "speaker turn adjacent word pair"
+        if record.getMessage().startswith("speaker pair index=")
     ]
-    assert len(pair_records) == 20
-    assert all(record.same_provider for record in pair_records)
-    assert all(record.same_label for record in pair_records)
-    assert all(record.can_merge for record in pair_records)
+    assert len(pair_records) == 10
+    assert all(record.args[6] for record in pair_records)
+    assert all(record.args[7] for record in pair_records)
+    assert all(record.args[13] for record in pair_records)
 
 
 def test_returning_speaker_words_create_three_turns_and_two_participants() -> None:
