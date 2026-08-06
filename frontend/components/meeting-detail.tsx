@@ -36,6 +36,10 @@ import {
   type TranslationSection
 } from "./meeting-translation-state";
 import { MeetingExportDialog } from "./meeting-export-dialog";
+import {
+  nextAvailableSpeakerName,
+  selectedSpeakerTurns
+} from "./speaker-split-state";
 
 type MeetingDetailRow = {
   id: string;
@@ -384,6 +388,14 @@ export function MeetingDetail({ meetingId }: { meetingId: string }) {
   const [analysisError, setAnalysisError] = useState("");
   const [speakerError, setSpeakerError] = useState("");
   const [isSavingSpeaker, setIsSavingSpeaker] = useState(false);
+  const [splitParticipantId, setSplitParticipantId] = useState("");
+  const [splitSegmentIds, setSplitSegmentIds] = useState<Set<string>>(new Set());
+  const [splitDisplayName, setSplitDisplayName] = useState("");
+  const [isSplittingSpeaker, setIsSplittingSpeaker] = useState(false);
+  const [splitUndo, setSplitUndo] = useState<{
+    originalParticipantId: string;
+    newParticipantId: string;
+  } | null>(null);
 
   const loadMeeting = useCallback(async () => {
     const supabase = createBrowserSupabaseClient();
@@ -1223,6 +1235,105 @@ export function MeetingDetail({ meetingId }: { meetingId: string }) {
     }
   }
 
+  function openSpeakerSplit(participantId: string) {
+    setSpeakerError("");
+    setSplitParticipantId(participantId);
+    setSplitSegmentIds(new Set());
+    setSplitDisplayName(nextAvailableSpeakerName(participants));
+  }
+
+  function closeSpeakerSplit() {
+    if (isSplittingSpeaker) {
+      return;
+    }
+    setSplitParticipantId("");
+    setSplitSegmentIds(new Set());
+    setSplitDisplayName("");
+  }
+
+  async function splitSpeaker() {
+    if (!splitParticipantId || splitSegmentIds.size === 0) {
+      setSpeakerError("Select at least one transcript turn to create a new speaker.");
+      return;
+    }
+    setIsSplittingSpeaker(true);
+    setSpeakerError("");
+    try {
+      const accessToken = await getAccessToken();
+      const response = await fetch(
+        `${apiBaseUrl}/v1/meetings/${meetingId}/participants/${splitParticipantId}/split`,
+        {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${accessToken}`,
+            "Content-Type": "application/json"
+          },
+          body: JSON.stringify({
+            segment_ids: [...splitSegmentIds],
+            display_name: splitDisplayName.trim() || null
+          })
+        }
+      );
+      const payload = await response.json().catch(() => null);
+      if (!response.ok) {
+        throw new Error(payload?.detail ?? "Unable to split speaker.");
+      }
+      setSplitUndo({
+        originalParticipantId: splitParticipantId,
+        newParticipantId: payload.participant.id
+      });
+      setSplitParticipantId("");
+      setSplitSegmentIds(new Set());
+      setSplitDisplayName("");
+      await refreshMeetingData();
+    } catch (splitError) {
+      setSpeakerError(
+        splitError instanceof Error ? splitError.message : "Unable to split speaker."
+      );
+    } finally {
+      setIsSplittingSpeaker(false);
+    }
+  }
+
+  async function undoSpeakerSplit() {
+    if (!splitUndo) {
+      return;
+    }
+    setIsSplittingSpeaker(true);
+    setSpeakerError("");
+    try {
+      const accessToken = await getAccessToken();
+      const response = await fetch(
+        `${apiBaseUrl}/v1/meetings/${meetingId}/participants/merge`,
+        {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${accessToken}`,
+            "Content-Type": "application/json"
+          },
+          body: JSON.stringify({
+            source_participant_id: splitUndo.newParticipantId,
+            target_participant_id: splitUndo.originalParticipantId
+          })
+        }
+      );
+      if (!response.ok) {
+        const payload = await response.json().catch(() => null);
+        throw new Error(payload?.detail ?? "Unable to undo speaker split.");
+      }
+      setSplitUndo(null);
+      await refreshMeetingData();
+    } catch (undoError) {
+      setSpeakerError(
+        undoError instanceof Error
+          ? undoError.message
+          : "Unable to undo speaker split."
+      );
+    } finally {
+      setIsSplittingSpeaker(false);
+    }
+  }
+
   if (isLoading) {
     return (
       <section className="rounded-lg border border-slate-200 bg-white p-6 shadow-sm">
@@ -1301,6 +1412,9 @@ export function MeetingDetail({ meetingId }: { meetingId: string }) {
   const hasUnassignedSpeech = speakerStats.some(
     (speaker) => speaker.speaker_label === "Unknown Speaker"
   );
+  const splitTurns = splitParticipantId
+    ? selectedSpeakerTurns(transcriptSegments, splitParticipantId)
+    : [];
   const processingTimeline = buildProcessingTimeline(meeting, processingEvents);
   const latestTranscriptionEvent = [...processingEvents]
     .reverse()
@@ -1629,12 +1743,29 @@ export function MeetingDetail({ meetingId }: { meetingId: string }) {
                 Some speech could not be assigned to a speaker
               </p>
             ) : null}
+            <p className="mt-2 text-xs text-slate-500">
+              Use Split speaker when multiple people were grouped under one detected speaker.
+            </p>
           </div>
         </div>
 
         {speakerError ? (
           <div className="mt-5 rounded-lg border border-red-200 bg-red-50 p-4 text-sm text-red-700">
             {speakerError}
+          </div>
+        ) : null}
+
+        {splitUndo ? (
+          <div className="mt-5 flex flex-wrap items-center justify-between gap-3 rounded-lg border border-emerald-200 bg-emerald-50 p-4 text-sm text-emerald-800">
+            <span>Speaker split created.</span>
+            <button
+              className="rounded-md border border-emerald-300 bg-white px-3 py-1.5 font-medium text-emerald-800 hover:bg-emerald-100 disabled:opacity-60"
+              type="button"
+              disabled={isSplittingSpeaker}
+              onClick={() => void undoSpeakerSplit()}
+            >
+              Undo
+            </button>
           </div>
         ) : null}
 
@@ -1737,11 +1868,99 @@ export function MeetingDetail({ meetingId }: { meetingId: string }) {
                     </button>
                   </div>
                 ) : null}
+                <button
+                  className="mt-3 w-full rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-ink transition hover:bg-slate-100 disabled:cursor-not-allowed disabled:text-slate-400"
+                  type="button"
+                  disabled={isSplittingSpeaker || speaker.segmentCount === 0}
+                  onClick={() => openSpeakerSplit(speaker.id)}
+                >
+                  Split speaker
+                </button>
               </article>
             ))}
           </div>
         ) : null}
       </section>
+
+      {splitParticipantId ? (
+        <div
+          aria-modal="true"
+          className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/50 p-4"
+          role="dialog"
+        >
+          <div className="max-h-[90vh] w-full max-w-2xl overflow-y-auto rounded-xl bg-white p-6 shadow-xl">
+            <h3 className="text-lg font-semibold text-ink">Split speaker</h3>
+            <p className="mt-1 text-sm text-slate-600">
+              Select the transcript turns that belong to the new speaker. Unselected turns will not change.
+            </p>
+            <label className="mt-5 block text-sm font-medium text-ink" htmlFor="split-speaker-name">
+              New speaker name
+            </label>
+            <input
+              className="mt-2 w-full rounded-md border border-slate-300 px-3 py-2 text-sm text-ink outline-none focus:border-signal focus:ring-2 focus:ring-blue-100"
+              id="split-speaker-name"
+              value={splitDisplayName}
+              onChange={(event) => setSplitDisplayName(event.target.value)}
+            />
+            <fieldset className="mt-5 grid gap-2">
+              <legend className="mb-2 text-sm font-medium text-ink">Transcript turns</legend>
+              {splitTurns.map((segment) => (
+                <label
+                  className="flex cursor-pointer gap-3 rounded-lg border border-slate-200 p-3 hover:bg-slate-50"
+                  key={segment.id}
+                >
+                  <input
+                    checked={splitSegmentIds.has(segment.id)}
+                    className="mt-1 h-4 w-4"
+                    type="checkbox"
+                    onChange={(event) => {
+                      setSplitSegmentIds((current) => {
+                        const next = new Set(current);
+                        if (event.target.checked) {
+                          next.add(segment.id);
+                        } else {
+                          next.delete(segment.id);
+                        }
+                        return next;
+                      });
+                    }}
+                  />
+                  <span>
+                    <span className="block text-xs font-medium text-slate-500">
+                      {formatTranscriptTime(segment.start_ms)}–{formatTranscriptTime(segment.end_ms)}
+                    </span>
+                    <span className="mt-1 block text-sm leading-6 text-ink">
+                      {displayedTranscriptText(segment, englishSections.has("transcript"))}
+                    </span>
+                  </span>
+                </label>
+              ))}
+            </fieldset>
+            <div className="mt-6 flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
+              <button
+                className="rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-ink hover:bg-slate-100 disabled:opacity-60"
+                type="button"
+                disabled={isSplittingSpeaker}
+                onClick={closeSpeakerSplit}
+              >
+                Cancel
+              </button>
+              <button
+                className="rounded-md bg-signal px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:bg-slate-300"
+                type="button"
+                disabled={
+                  isSplittingSpeaker ||
+                  splitSegmentIds.size === 0 ||
+                  !splitDisplayName.trim()
+                }
+                onClick={() => void splitSpeaker()}
+              >
+                {isSplittingSpeaker ? "Splitting…" : "Create new speaker"}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
 
       <section
         className="rounded-lg border border-slate-200 bg-white p-6 shadow-sm"

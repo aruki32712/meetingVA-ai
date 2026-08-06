@@ -126,6 +126,11 @@ class AssignTranscriptSegmentsRequest(BaseModel):
     display_name: str | None = Field(default=None, max_length=120)
 
 
+class SplitParticipantRequest(BaseModel):
+    segment_ids: list[str] = Field(min_length=1)
+    display_name: str | None = Field(default=None, max_length=120)
+
+
 class TranscribeMeetingRequest(BaseModel):
     translate_to_english: bool = False
 
@@ -3049,6 +3054,116 @@ async def merge_participants(
         "target_participant_id": target["id"],
         "merged_participant_id": source["id"],
         "updated_segment_count": updated_segment_count,
+    }
+
+
+def _next_available_speaker_name(participants: list[dict[str, Any]]) -> str:
+    existing_names = {
+        _coerce_text(participant.get("display_name")).casefold()
+        for participant in participants
+    }
+    speaker_number = 1
+    while f"speaker {speaker_number}".casefold() in existing_names:
+        speaker_number += 1
+    return f"Speaker {speaker_number}"
+
+
+@app.post(
+    "/v1/meetings/{meeting_id}/participants/{participant_id}/split",
+    tags=["speakers"],
+)
+async def split_participant(
+    meeting_id: str,
+    participant_id: str,
+    payload: SplitParticipantRequest,
+    authorization: str | None = Header(default=None),
+) -> dict[str, Any]:
+    meeting_id = _validate_uuid(meeting_id, "meeting_id")
+    participant_id = _validate_uuid(participant_id, "participant_id")
+    unique_segment_ids = list(
+        dict.fromkeys(
+            _validate_uuid(segment_id, "segment_id")
+            for segment_id in payload.segment_ids
+        )
+    )
+    token = _require_bearer_token(authorization)
+    service_client = get_supabase_service_client()
+    user_id = _require_user_id(token)
+    _require_owned_meeting(service_client, meeting_id, user_id)
+    source_participant = _require_participant(
+        service_client,
+        meeting_id=meeting_id,
+        participant_id=participant_id,
+    )
+
+    selected_response = (
+        service_client.table("transcript_segments")
+        .select(
+            "id,participant_id,speaker_label,start_ms,end_ms,text,"
+            "original_text,translated_text,segment_index"
+        )
+        .eq("meeting_id", meeting_id)
+        .eq("participant_id", source_participant["id"])
+        .in_("id", unique_segment_ids)
+        .execute()
+    )
+    selected_segments = selected_response.data or []
+    selected_ids = {segment["id"] for segment in selected_segments}
+    if selected_ids != set(unique_segment_ids):
+        raise HTTPException(
+            status_code=404,
+            detail="One or more selected transcript turns do not belong to this speaker.",
+        )
+
+    display_name = _coerce_optional_text(payload.display_name)
+    if not display_name:
+        participant_response = (
+            service_client.table("participants")
+            .select("display_name")
+            .eq("meeting_id", meeting_id)
+            .execute()
+        )
+        display_name = _next_available_speaker_name(
+            participant_response.data or []
+        )
+    participant = _create_participant(
+        service_client,
+        meeting_id=meeting_id,
+        display_name=display_name,
+        speaker_label=display_name,
+        source="owner",
+    )
+    updated = (
+        service_client.table("transcript_segments")
+        .update(
+            {
+                "participant_id": participant["id"],
+                "speaker_label": participant.get("speaker_label")
+                or participant["display_name"],
+            }
+        )
+        .eq("meeting_id", meeting_id)
+        .eq("participant_id", source_participant["id"])
+        .in_("id", unique_segment_ids)
+        .execute()
+    )
+    if len(updated.data or []) != len(unique_segment_ids):
+        (
+            service_client.table("participants")
+            .delete()
+            .eq("id", participant["id"])
+            .eq("meeting_id", meeting_id)
+            .execute()
+        )
+        raise HTTPException(
+            status_code=409,
+            detail="The transcript changed before the speaker could be split. Please retry.",
+        )
+    return {
+        "participant": participant,
+        "source_participant_id": source_participant["id"],
+        "segment_ids": unique_segment_ids,
+        "updated_segment_count": len(updated.data or []),
     }
 
 
