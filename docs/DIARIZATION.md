@@ -28,3 +28,24 @@ Recommended production configuration:
 Speaker diarization remains probabilistic. Similar voices, background noise,
 short utterances, distant microphones, and overlapping speech can reduce the
 number of speakers detected or leave words unassigned.
+
+## Admin/development model comparison
+
+`DIARIZATION_MODEL_VERSION` accepts only `latest`, `v2`, or `v1`; normal
+transcription sends exactly one Deepgram request using the configured value.
+For a consented local recording, an administrator or developer can explicitly
+compare all three versions from the backend directory:
+
+```powershell
+python -m scripts.compare_diarization_models C:\path\to\recording.wav --consent-confirmed
+```
+
+The command makes three provider requests and logs only model version, response
+status, duration, speaker IDs/counts, utterance counts, and safe audio metadata.
+It is not exposed through the user-facing API or frontend.
+
+MeetingVA preserves the uploaded sample rate and channel layout. Deepgram's
+`multichannel=true` mode is appropriate only when separate input channels
+actually contain separate speakers. It is not interchangeable with diarization
+for an ordinary mixed stereo recording and remains disabled in the normal
+pipeline.

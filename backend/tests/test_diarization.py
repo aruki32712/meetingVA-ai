@@ -1,7 +1,10 @@
 import asyncio
+import io
 import logging
+import wave
 import httpx
 import pytest
+from pydantic import ValidationError
 
 from app import diarization
 from app.diarization import DiarizedTurn, align_transcript_rows_to_turns, align_words_to_diarization
@@ -13,6 +16,7 @@ from app.main import (
     _build_word_timestamp_rows,
     build_speaker_turn_rows,
 )
+from app.settings import Settings
 
 
 class FakeParticipantTable:
@@ -877,6 +881,7 @@ def test_one_provider_speaker_is_reported_honestly() -> None:
 def test_deepgram_request_enables_diarization_and_sends_original_audio(monkeypatch) -> None:
     observed: dict[str, object] = {}
     async def handler(request: httpx.Request) -> httpx.Response:
+        observed["request_count"] = int(observed.get("request_count", 0)) + 1
         observed["query"] = dict(request.url.params)
         observed["content_type"] = request.headers.get("content-type")
         observed["body"] = await request.aread()
@@ -902,6 +907,94 @@ def test_deepgram_request_enables_diarization_and_sends_original_audio(monkeypat
     assert observed["body"] == b"original-audio"
     assert turns[0].speaker_id == "0"
     assert turns[0].turn_id == "utterance-1:1"
+    assert observed["request_count"] == 1
+
+
+@pytest.mark.parametrize("version", ["latest", "v2", "v1"])
+def test_diarization_model_version_setting_accepts_supported_values(version) -> None:
+    assert Settings(diarization_model_version=version).diarization_model_version == version
+
+
+def test_diarization_model_version_setting_rejects_unknown_value() -> None:
+    with pytest.raises(ValidationError):
+        Settings(diarization_model_version="experimental")
+
+
+def test_explicit_comparison_runs_each_supported_model_once(monkeypatch) -> None:
+    observed: list[str] = []
+
+    async def fake_diarize(**kwargs):
+        observed.append(kwargs["model_version"])
+        return [DiarizedTurn("0", 0, 100, 0.9)]
+
+    monkeypatch.setattr(diarization, "_diarize_with_deepgram", fake_diarize)
+    summaries = asyncio.run(
+        diarization.compare_deepgram_diarization_models(
+            audio_bytes=b"audio",
+            filename="recording.webm",
+            content_type="audio/webm",
+            api_key="secret",
+        )
+    )
+
+    assert observed == ["latest", "v2", "v1"]
+    assert [summary["model_version"] for summary in summaries] == observed
+    assert all(summary["request_status"] == 200 for summary in summaries)
+
+
+def test_safe_wav_audio_diagnostics_include_format_and_peak() -> None:
+    output = io.BytesIO()
+    with wave.open(output, "wb") as audio:
+        audio.setnchannels(2)
+        audio.setsampwidth(2)
+        audio.setframerate(16_000)
+        audio.writeframes((1000).to_bytes(2, "little", signed=True) * 200)
+
+    metadata = diarization._safe_audio_metadata(output.getvalue(), "audio/wav")
+
+    assert metadata["channel_count"] == 2
+    assert metadata["sample_rate_hz"] == 16_000
+    assert metadata["codec"] == "pcm_s16le"
+    assert metadata["bitrate_bps"] == 512_000
+    assert metadata["peak_amplitude_ratio"] == pytest.approx(1000 / 32768, abs=0.0001)
+    assert metadata["clipped_sample_ratio"] == 0
+
+
+def test_single_provider_speaker_emits_clear_diagnostic(monkeypatch, caplog) -> None:
+    async def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"results": {"channels": [{"alternatives": [{"words": [
+            {"speaker": 0, "word": "one", "start": 0, "end": 0.5},
+            {"speaker": 0, "word": "two", "start": 0.5, "end": 1},
+        ]}]}], "utterances": [{"speaker": 0, "start": 0, "end": 1}]}})
+
+    real_client = httpx.AsyncClient
+    monkeypatch.setattr(
+        diarization.httpx,
+        "AsyncClient",
+        lambda *args, **kwargs: real_client(
+            *args, transport=httpx.MockTransport(handler), **kwargs
+        ),
+    )
+    monkeypatch.setattr(
+        diarization,
+        "get_settings",
+        lambda: type("Settings", (), {
+            "diarization_model": "nova-3",
+            "diarization_model_version": "latest",
+            "diarization_maximum_turn_gap_ms": 750,
+            "diarization_minimum_confidence": 0.5,
+        })(),
+    )
+
+    with caplog.at_level(logging.INFO):
+        asyncio.run(diarization._diarize_with_deepgram(
+            audio_bytes=b"audio",
+            filename="recording.webm",
+            content_type="audio/webm",
+            api_key="secret",
+        ))
+
+    assert "The diarization provider classified this recording as one speaker." in caplog.text
 
 
 def test_deepgram_400_logs_sanitized_provider_response(monkeypatch, caplog) -> None:

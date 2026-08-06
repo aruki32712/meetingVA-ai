@@ -1,7 +1,10 @@
 import io
 import logging
 import re
+import sys
+import time
 import wave
+from array import array
 from collections import Counter, defaultdict
 from dataclasses import dataclass
 from typing import Any
@@ -191,6 +194,10 @@ def _safe_audio_metadata(audio_bytes: bytes, content_type: str) -> dict[str, Any
         "channel_count": None,
         "sample_rate_hz": None,
         "duration_seconds": None,
+        "codec": None,
+        "bitrate_bps": None,
+        "peak_amplitude_ratio": None,
+        "clipped_sample_ratio": None,
     }
     if content_type.split(";", 1)[0].casefold() not in {
         "audio/wav",
@@ -200,15 +207,50 @@ def _safe_audio_metadata(audio_bytes: bytes, content_type: str) -> dict[str, Any
         return metadata
     try:
         with wave.open(io.BytesIO(audio_bytes), "rb") as audio:
+            sample_width = audio.getsampwidth()
+            channel_count = audio.getnchannels()
+            sample_rate = audio.getframerate()
+            frames = audio.getnframes()
             metadata.update(
                 {
-                    "channel_count": audio.getnchannels(),
-                    "sample_rate_hz": audio.getframerate(),
+                    "channel_count": channel_count,
+                    "sample_rate_hz": sample_rate,
                     "duration_seconds": round(
-                        audio.getnframes() / max(1, audio.getframerate()), 3
+                        frames / max(1, sample_rate), 3
                     ),
+                    "codec": f"pcm_s{sample_width * 8}le",
+                    "bitrate_bps": sample_rate * channel_count * sample_width * 8,
                 }
             )
+            sample_bytes = audio.readframes(min(frames, 100_000))
+            samples: list[int]
+            peak_value: int
+            clipping_value: int
+            if sample_width == 1:
+                samples = [value - 128 for value in sample_bytes]
+                peak_value = 128
+                clipping_value = 127
+            elif sample_width == 2:
+                values = array("h")
+                values.frombytes(sample_bytes)
+                if sys.byteorder != "little":
+                    values.byteswap()
+                samples = list(values)
+                peak_value = 32768
+                clipping_value = 32767
+            else:
+                samples = []
+                peak_value = 1
+                clipping_value = 1
+            if samples:
+                metadata["peak_amplitude_ratio"] = round(
+                    max(abs(value) for value in samples) / peak_value, 4
+                )
+                metadata["clipped_sample_ratio"] = round(
+                    sum(abs(value) >= clipping_value for value in samples)
+                    / len(samples),
+                    6,
+                )
     except (EOFError, wave.Error):
         pass
     return metadata
@@ -354,16 +396,19 @@ async def _diarize_with_deepgram(
     content_type: str,
     api_key: str,
     expected_speakers: int | None = None,
+    model_version: str | None = None,
 ) -> list[DiarizedTurn]:
     if not api_key:
         raise RuntimeError("Deepgram diarization API key is not configured")
 
     settings = get_settings()
     model = settings.diarization_model
-    diarize_model = settings.diarization_model_version
+    diarize_model = model_version or settings.diarization_model_version
+    if diarize_model not in {"latest", "v2", "v1"}:
+        raise ValueError(f"Unsupported Deepgram diarization model version: {diarize_model}")
     audio_metadata = _safe_audio_metadata(audio_bytes, content_type)
     logger.info(
-        "Deepgram diarization request endpoint=prerecorded model=%s diarize_model=%s utterances=true punctuate=true smart_format=true multichannel=false expected_speakers_diagnostic=%s mime_type=%s channels=%s sample_rate_hz=%s duration_seconds=%s original_audio_preserved=true",
+        "Deepgram diarization request endpoint=prerecorded model=%s diarize_model=%s utterances=true punctuate=true smart_format=true multichannel=false expected_speakers_diagnostic=%s mime_type=%s channels=%s sample_rate_hz=%s duration_seconds=%s codec=%s bitrate_bps=%s peak_amplitude_ratio=%s clipped_sample_ratio=%s original_audio_preserved=true",
         model,
         diarize_model,
         expected_speakers,
@@ -371,7 +416,12 @@ async def _diarize_with_deepgram(
         audio_metadata["channel_count"],
         audio_metadata["sample_rate_hz"],
         audio_metadata["duration_seconds"],
+        audio_metadata["codec"],
+        audio_metadata["bitrate_bps"],
+        audio_metadata["peak_amplitude_ratio"],
+        audio_metadata["clipped_sample_ratio"],
     )
+    request_started = time.perf_counter()
     async with httpx.AsyncClient(timeout=180) as client:
         response = await client.post(
             "https://api.deepgram.com/v1/listen",
@@ -389,7 +439,13 @@ async def _diarize_with_deepgram(
             content=audio_bytes,
         )
 
-    logger.info("Deepgram diarization response received", extra={"deepgram_http_status": response.status_code, "diarization_model": model})
+    processing_duration_ms = round((time.perf_counter() - request_started) * 1000)
+    logger.info(
+        "Deepgram diarization response model_version=%s request_status=%s processing_duration_ms=%s",
+        diarize_model,
+        response.status_code,
+        processing_duration_ms,
+    )
     if response.status_code >= 400:
         logger.error(
             "Deepgram diarization request failed status=%s response=%s",
@@ -453,6 +509,8 @@ async def _diarize_with_deepgram(
         response_metadata.get("duration"),
         response_metadata.get("sample_rate"),
     )
+    if len(set(raw_speaker_ids)) == 1:
+        logger.info("The diarization provider classified this recording as one speaker.")
     stable_speaker_ids = sorted(
         {turn.speaker_id for turn in turns if turn.speaker_id is not None}
     )
@@ -468,6 +526,53 @@ async def _diarize_with_deepgram(
     )
     logger.info("Deepgram diarization payload parsed", extra={"deepgram_channel_count": len(channels), "deepgram_paragraph_count": paragraphs, "deepgram_utterance_count": len(utterances), "deepgram_word_count": words, "diarized_turn_count": len(turns), "diarized_unit_count": len(units), "diarized_unique_speaker_ids": stable_speaker_ids, "diarized_speaker_count": len(stable_speaker_ids), "diarized_first_timestamp_ms": turns[0].start_ms if turns else None, "diarized_last_timestamp_ms": turns[-1].end_ms if turns else None, "deepgram_speaker_response_path": response_path})
     return turns
+
+
+async def compare_deepgram_diarization_models(
+    *,
+    audio_bytes: bytes,
+    filename: str,
+    content_type: str,
+    api_key: str,
+) -> list[dict[str, Any]]:
+    """Run an explicit admin/development comparison, never the normal pipeline."""
+    summaries: list[dict[str, Any]] = []
+    for model_version in ("latest", "v2", "v1"):
+        started = time.perf_counter()
+        try:
+            turns = await _diarize_with_deepgram(
+                audio_bytes=audio_bytes,
+                filename=filename,
+                content_type=content_type,
+                api_key=api_key,
+                model_version=model_version,
+            )
+            summaries.append(
+                {
+                    "model_version": model_version,
+                    "request_status": 200,
+                    "processing_duration_ms": round(
+                        (time.perf_counter() - started) * 1000
+                    ),
+                    "raw_unique_speaker_ids": sorted(
+                        {turn.speaker_id for turn in turns if turn.speaker_id is not None}
+                    ),
+                    "provider_turn_count": len(turns),
+                }
+            )
+        except Exception as exc:
+            match = re.search(r"status (\d{3})", str(exc))
+            summaries.append(
+                {
+                    "model_version": model_version,
+                    "request_status": int(match.group(1)) if match else None,
+                    "processing_duration_ms": round(
+                        (time.perf_counter() - started) * 1000
+                    ),
+                    "error": type(exc).__name__,
+                }
+            )
+    return summaries
 
 
 def diarization_status() -> dict[str, str | bool]:
