@@ -355,6 +355,121 @@ def _aligned_word(
     return row
 
 
+def _unknown_word(
+    index: int,
+    *,
+    start_ms: int,
+    end_ms: int,
+    boundary_index: int = 0,
+) -> dict:
+    row = _row(index, start_ms, end_ms, f"unknown{index}")
+    row.update(
+        {
+            "speaker_label": None,
+            "provider_speaker_id": None,
+            "diarization_available": True,
+            "diarization_ambiguous": True,
+            "diarization_boundary_index": boundary_index,
+        }
+    )
+    return row
+
+
+def test_one_hundred_consecutive_unknown_words_become_one_turn() -> None:
+    words = [
+        _unknown_word(
+            index,
+            start_ms=index * 300,
+            end_ms=index * 300 + 325,
+        )
+        for index in range(100)
+    ]
+    rows = build_speaker_turn_rows(words)
+    assert len(rows) == 1
+    assert rows[0]["provider_speaker_id"] is None
+    assert rows[0]["speaker_label"] is None
+    assert rows[0]["text"].split() == [word["text"] for word in words]
+
+
+def test_unknown_detected_unknown_produces_three_turns() -> None:
+    words = [
+        *[
+            _unknown_word(index, start_ms=index * 300, end_ms=index * 300 + 325)
+            for index in range(20)
+        ],
+        *[
+            _aligned_word(
+                index,
+                speaker="0",
+                start_ms=index * 300,
+                end_ms=index * 300 + 325,
+            )
+            for index in range(20, 35)
+        ],
+        *[
+            _unknown_word(index, start_ms=index * 300, end_ms=index * 300 + 325)
+            for index in range(35, 55)
+        ],
+    ]
+    rows = build_speaker_turn_rows(words)
+    assert [row["provider_speaker_id"] for row in rows] == [None, "0", None]
+
+
+def test_detected_unknown_detected_creates_at_most_three_participants() -> None:
+    words = [
+        *[
+            _aligned_word(index, speaker="0", start_ms=index * 300, end_ms=index * 300 + 325)
+            for index in range(10)
+        ],
+        *[
+            _unknown_word(index, start_ms=index * 300, end_ms=index * 300 + 325)
+            for index in range(10, 30)
+        ],
+        *[
+            _aligned_word(index, speaker="1", start_ms=index * 300, end_ms=index * 300 + 325)
+            for index in range(30, 40)
+        ],
+    ]
+    client = FakeSupabaseClient()
+    attached = _attach_participants_to_transcript_rows(
+        client,
+        meeting_id="meeting-id",
+        rows=build_speaker_turn_rows(words),
+    )
+    assert len(attached) == 3
+    assert len(client.participants.rows) == 3
+    assert {row["display_name"] for row in client.participants.rows} == {
+        "Speaker 1",
+        "Unknown Speaker",
+        "Speaker 2",
+    }
+
+
+def test_unknown_words_split_on_long_pause_and_keep_all_words() -> None:
+    words = [
+        _unknown_word(0, start_ms=0, end_ms=300),
+        _unknown_word(1, start_ms=300, end_ms=600),
+        _unknown_word(2, start_ms=2500, end_ms=2800),
+        _unknown_word(3, start_ms=2800, end_ms=3100),
+    ]
+    rows = build_speaker_turn_rows(words)
+    assert len(rows) == 2
+    assert [row["segment_index"] for row in rows] == [0, 1]
+    assert " ".join(row["text"] for row in rows).split() == [
+        word["text"] for word in words
+    ]
+
+
+def test_unknown_words_do_not_cross_explicit_diarization_boundary() -> None:
+    words = [
+        _unknown_word(0, start_ms=0, end_ms=300, boundary_index=0),
+        _unknown_word(1, start_ms=300, end_ms=600, boundary_index=0),
+        _unknown_word(2, start_ms=600, end_ms=900, boundary_index=1),
+        _unknown_word(3, start_ms=900, end_ms=1200, boundary_index=1),
+    ]
+    assert len(build_speaker_turn_rows(words)) == 2
+
+
 def test_one_hundred_overlapping_words_become_one_readable_turn() -> None:
     words = [
         _aligned_word(
@@ -578,6 +693,49 @@ def test_production_word_orchestration_rebuilds_281_words_into_seven_turns() -> 
         previous["speaker_label"] != following["speaker_label"]
         for previous, following in zip(attached, attached[1:])
     )
+
+
+def test_production_path_groups_196_unknown_words_around_four_detected_turns() -> None:
+    detected_indexes = {49: "0", 99: "1", 149: "2", 199: "3"}
+    word_rows = _build_word_timestamp_rows(
+        "meeting-id",
+        {
+            "words": [
+                {
+                    "word": f"token{index}",
+                    "start": index * 0.4,
+                    "end": index * 0.4 + 0.3,
+                }
+                for index in range(200)
+            ]
+        },
+    )
+    diarized_turns = [
+        DiarizedTurn(
+            speaker,
+            index * 400,
+            index * 400 + 300,
+            0.95,
+        )
+        for index, speaker in detected_indexes.items()
+    ]
+    diagnostics: dict = {}
+    aligned_words, grouped_rows = _align_and_build_speaker_turn_rows(
+        word_rows,
+        diarized_turns,
+        minimum_confidence=0.5,
+        minimum_overlap=0.5,
+        nearest_turn_tolerance_ms=0,
+        diagnostics=diagnostics,
+    )
+    assert sum(word["provider_speaker_id"] is None for word in aligned_words) == 196
+    assert len(grouped_rows) == 8
+    assert sum(row["provider_speaker_id"] is None for row in grouped_rows) == 4
+    assert len(grouped_rows) < len(aligned_words) / 10
+    assert [row["segment_index"] for row in grouped_rows] == list(range(8))
+    assert " ".join(row["text"] for row in grouped_rows).split() == [
+        row["text"] for row in word_rows
+    ]
 
 
 def test_long_same_speaker_splits_without_changing_identity() -> None:

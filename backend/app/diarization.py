@@ -444,6 +444,9 @@ def align_words_to_diarization(
         aligned["diarization_confidence"] = selected.confidence if selected else None
         aligned["diarization_ambiguous"] = ambiguous
         aligned["diarization_available"] = bool(ordered_turns)
+        aligned["diarization_boundary_index"] = sum(
+            turn.start_ms <= midpoint_ms for turn in ordered_turns
+        )
         aligned_words.append(aligned)
 
     return aligned_words

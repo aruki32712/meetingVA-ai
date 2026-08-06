@@ -368,6 +368,26 @@ def _normalize_provider_speaker_id(value: Any) -> str | None:
     return normalized.split(":", 1)[1] if normalized.startswith("deepgram:") else normalized
 
 
+def _normalize_word_speaker_label(
+    value: Any, provider_speaker_id: str | None
+) -> str | None:
+    label = _coerce_optional_text(value)
+    if provider_speaker_id is None and (
+        label is None or label.casefold() == UNKNOWN_SPEAKER_LABEL.casefold()
+    ):
+        return None
+    return label
+
+
+def _word_grouping_identity(word: dict[str, Any]) -> tuple[str, str | int]:
+    provider_speaker_id = _normalize_provider_speaker_id(
+        word.get("provider_speaker_id")
+    )
+    if provider_speaker_id is not None:
+        return ("provider", provider_speaker_id)
+    return ("unknown", int(word.get("diarization_boundary_index") or 0))
+
+
 def build_speaker_turn_rows(
     aligned_words: list[dict[str, Any]],
     *,
@@ -393,8 +413,11 @@ def build_speaker_turn_rows(
         )
         return {
             "meeting_id": word.get("meeting_id"),
-            "speaker_label": word.get("speaker_label"),
+            "speaker_label": _normalize_word_speaker_label(
+                word.get("speaker_label"), provider_speaker_id
+            ),
             "provider_speaker_id": provider_speaker_id,
+            "_grouping_identity": _word_grouping_identity(word),
             "start_ms": int(word.get("start_ms") or 0),
             "end_ms": int(word.get("end_ms") or 0),
             "text": _normalize_transcript_spacing(word.get("text")) or "",
@@ -421,6 +444,9 @@ def build_speaker_turn_rows(
         word["provider_speaker_id"] = _normalize_provider_speaker_id(
             word.get("provider_speaker_id")
         )
+        word["speaker_label"] = _normalize_word_speaker_label(
+            word.get("speaker_label"), word["provider_speaker_id"]
+        )
         if current is None:
             current = start_turn(word)
             continue
@@ -433,7 +459,7 @@ def build_speaker_turn_rows(
             for field in ("text", "original_text", "translated_text")
         }
         same_speaker = (
-            current.get("provider_speaker_id") == word.get("provider_speaker_id")
+            current.get("_grouping_identity") == _word_grouping_identity(word)
             and current.get("speaker_label") == word.get("speaker_label")
         )
         compatible_kind = current.get("transcript_kind") == word.get(
@@ -447,9 +473,13 @@ def build_speaker_turn_rows(
             word_end_ms - int(current.get("start_ms") or 0)
             <= maximum_turn_duration_ms
         )
-        unambiguous = (
-            current.get("provider_speaker_id") is not None
-            and not current.get("diarization_ambiguous")
+        unknown_pair = (
+            current.get("provider_speaker_id") is None
+            and word.get("provider_speaker_id") is None
+        )
+        grouping_is_safe = (
+            unknown_pair
+            or not current.get("diarization_ambiguous")
             and not word.get("diarization_ambiguous")
         )
         can_merge = (
@@ -458,7 +488,7 @@ def build_speaker_turn_rows(
             and word_gap_ms <= maximum_word_gap_ms
             and within_duration
             and within_size
-            and unambiguous
+            and grouping_is_safe
         )
         if adjacent_pair_count < 10:
             logger.info(
@@ -472,7 +502,10 @@ def build_speaker_turn_rows(
                 current.get("provider_speaker_id")
                 == word.get("provider_speaker_id"),
                 current.get("speaker_label") == word.get("speaker_label"),
-                not unambiguous,
+                bool(
+                    current.get("diarization_ambiguous")
+                    or word.get("diarization_ambiguous")
+                ),
                 compatible_kind,
                 word_gap_ms <= maximum_word_gap_ms,
                 within_duration,
@@ -506,6 +539,7 @@ def build_speaker_turn_rows(
         turns.append(current)
     for index, turn in enumerate(turns):
         turn["segment_index"] = index
+        turn.pop("_grouping_identity", None)
 
     if diagnostics is not None:
         durations = [
@@ -574,6 +608,53 @@ def _align_and_build_speaker_turn_rows(
         len(grouped_rows),
         safe_context["unique_provider_speaker_ids"],
         safe_context["unique_speaker_labels"],
+    )
+    detected_word_count = sum(
+        _normalize_provider_speaker_id(word.get("provider_speaker_id")) is not None
+        for word in aligned_words
+    )
+    unknown_word_count = len(aligned_words) - detected_word_count
+    unknown_run_count = 0
+    longest_unknown_word_run = 0
+    current_unknown_run = 0
+    previous_unknown_identity: tuple[str, str | int] | None = None
+    previous_unknown_end_ms: int | None = None
+    for word in aligned_words:
+        identity = _word_grouping_identity(word)
+        if identity[0] != "unknown":
+            current_unknown_run = 0
+            previous_unknown_identity = None
+            previous_unknown_end_ms = None
+            continue
+        word_start_ms = int(word.get("start_ms") or 0)
+        begins_run = (
+            previous_unknown_identity != identity
+            or previous_unknown_end_ms is None
+            or word_start_ms - previous_unknown_end_ms
+            > MAX_SPEAKER_TURN_WORD_GAP_MS
+        )
+        if begins_run:
+            unknown_run_count += 1
+            current_unknown_run = 1
+        else:
+            current_unknown_run += 1
+        longest_unknown_word_run = max(
+            longest_unknown_word_run, current_unknown_run
+        )
+        previous_unknown_identity = identity
+        previous_unknown_end_ms = int(word.get("end_ms") or 0)
+    detected_turn_count = sum(
+        row.get("provider_speaker_id") is not None for row in grouped_rows
+    )
+    unknown_turn_count = len(grouped_rows) - detected_turn_count
+    logger.info(
+        "speaker unknown grouping detected_word_count=%s unknown_word_count=%s detected_turn_count=%s unknown_turn_count=%s longest_unknown_word_run=%s unknown_run_count=%s",
+        detected_word_count,
+        unknown_word_count,
+        detected_turn_count,
+        unknown_turn_count,
+        longest_unknown_word_run,
+        unknown_run_count,
     )
     return aligned_words, grouped_rows
 
@@ -1501,6 +1582,7 @@ def _attach_participants_to_transcript_rows(
         row.pop("diarization_confidence", None)
         row.pop("diarization_ambiguous", None)
         row.pop("diarization_available", None)
+        row.pop("diarization_boundary_index", None)
         row.pop("provider_speaker_id", None)
 
     return rows
