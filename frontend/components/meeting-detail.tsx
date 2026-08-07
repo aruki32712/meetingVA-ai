@@ -1451,7 +1451,7 @@ export function MeetingDetail({ meetingId }: { meetingId: string }) {
     setSpeakerError("");
     setSegmentSplitMessage("");
     if (process.env.NODE_ENV === "development") {
-      console.debug("split request started", {
+      console.log("split save click", {
         originalSegmentId: segment.id
       });
     }
@@ -1476,18 +1476,38 @@ export function MeetingDetail({ meetingId }: { meetingId: string }) {
           })
         }
       );
-      const payload = (await response.json().catch(() => null)) as
-        | TranscriptSegmentSplitResponse
-        | { detail?: string }
-        | null;
+      let payload: TranscriptSegmentSplitResponse | { detail?: string } | null = null;
+      if (response.status !== 204) {
+        const responseBody = await response.text();
+        if (responseBody) {
+          try {
+            payload = JSON.parse(responseBody) as
+              | TranscriptSegmentSplitResponse
+              | { detail?: string };
+          } catch {
+            payload = null;
+          }
+        }
+      }
+      const returnedPayload =
+        payload &&
+        "segments" in payload &&
+        Array.isArray(payload.segments) &&
+        payload.segments.length >= 2 &&
+        payload.original_segment_id === segment.id
+          ? payload
+          : null;
       if (process.env.NODE_ENV === "development") {
-        console.debug("split response received", {
-          originalSegmentId: segment.id,
-          responseStatus: response.status,
-          returnedNewSegmentIds:
-            payload && "segments" in payload && Array.isArray(payload.segments)
-              ? payload.segments.map((item) => item.id)
-              : []
+        console.log("split response status", response.status);
+        console.log("split response payload", {
+          originalSegmentId:
+            payload && "original_segment_id" in payload
+              ? payload.original_segment_id
+              : null,
+          returnedNewSegmentIds: returnedPayload?.segments.map((item) => item.id) ?? [],
+          hasParticipants:
+            Boolean(returnedPayload?.participants?.length),
+          analysisStale: returnedPayload?.analysis_stale ?? null
         });
       }
       if (!response.ok) {
@@ -1497,81 +1517,109 @@ export function MeetingDetail({ meetingId }: { meetingId: string }) {
             : "Unable to split transcript segment."
         );
       }
-      if (
-        !payload ||
-        !("segments" in payload) ||
-        !Array.isArray(payload.segments) ||
-        payload.segments.length < 2 ||
-        payload.original_segment_id !== segment.id
-      ) {
-        throw new Error(
-          "The saved split did not return updated transcript segments."
+      if (process.env.NODE_ENV === "development") {
+        console.log("split success branch entered");
+      }
+
+      let firstCreatedSegmentId = "";
+      const needsParticipantRefetch =
+        segmentSplitAssignments.some((assignment) => assignment.displayName.trim()) &&
+        !returnedPayload?.participants?.length;
+      if (returnedPayload && !needsParticipantRefetch) {
+        if (process.env.NODE_ENV === "development") {
+          console.log("refreshing transcript", { source: "split response" });
+        }
+        const updatedSegments = replaceTranscriptSegment(
+          transcriptSegments,
+          segment.id,
+          returnedPayload.segments
         );
-      }
-      const updatedSegments = replaceTranscriptSegment(
-        transcriptSegments,
-        segment.id,
-        payload.segments
-      );
-      setTranscriptSegments(updatedSegments);
-      setMeeting((current) =>
-        current
-          ? { ...current, analysis_stale: payload.analysis_stale }
-          : current
-      );
-      if (payload.participants?.length) {
-        setParticipants((current) => {
-          const byId = new Map(
-            current.map((participant) => [participant.id, participant])
-          );
-          payload.participants?.forEach((participant) => {
-            byId.set(participant.id, participant);
+        if (
+          updatedSegments.some((item) => item.id === segment.id) ||
+          returnedPayload.segments.some(
+            (item) => !updatedSegments.some((row) => row.id === item.id)
+          )
+        ) {
+          throw new Error("The saved split could not be applied to the transcript.");
+        }
+        setTranscriptSegments(updatedSegments);
+        setMeeting((current) =>
+          current
+            ? { ...current, analysis_stale: returnedPayload.analysis_stale }
+            : current
+        );
+        if (returnedPayload.participants?.length) {
+          setParticipants((current) => {
+            const byId = new Map(
+              current.map((participant) => [participant.id, participant])
+            );
+            returnedPayload.participants?.forEach((participant) => {
+              byId.set(participant.id, participant);
+            });
+            return [...byId.values()].sort((left, right) =>
+              left.created_at.localeCompare(right.created_at)
+            );
           });
-          return [...byId.values()].sort((left, right) =>
-            left.created_at.localeCompare(right.created_at)
+        }
+        firstCreatedSegmentId = returnedPayload.segments[0]?.id ?? "";
+        if (process.env.NODE_ENV === "development") {
+          console.log("transcript refresh complete", {
+            source: "split response",
+            returnedNewSegmentIds: returnedPayload.segments.map((item) => item.id)
+          });
+        }
+      } else {
+        if (process.env.NODE_ENV === "development") {
+          console.log("refreshing transcript", { source: "supabase refetch" });
+        }
+        const priorSegmentIds = new Set(transcriptSegments.map((item) => item.id));
+        const refreshed = await refreshMeetingData();
+        const replacementSegments = refreshed.transcriptSegments
+          .filter(
+            (item) =>
+              !priorSegmentIds.has(item.id) &&
+              item.segment_index >= segment.segment_index &&
+              item.segment_index < segment.segment_index + parts.length
+          )
+          .sort(
+            (left, right) =>
+              left.segment_index - right.segment_index || left.start_ms - right.start_ms
           );
-        });
+        if (
+          refreshed.transcriptSegments.some((item) => item.id === segment.id) ||
+          replacementSegments.length < parts.length
+        ) {
+          throw new Error("The transcript refresh did not include the saved split yet.");
+        }
+        firstCreatedSegmentId = replacementSegments[0]?.id ?? "";
+        if (process.env.NODE_ENV === "development") {
+          console.log("transcript refresh complete", {
+            source: "supabase refetch",
+            returnedNewSegmentIds: replacementSegments.map((item) => item.id)
+          });
+        }
       }
+
       if (process.env.NODE_ENV === "development") {
-        console.debug("transcript refetch started", {
-          originalSegmentId: segment.id
-        });
-      }
-      // This screen reads Supabase directly and has no React Query/SWR cache.
-      // Reloading invalidates meeting, transcript, participant, and derived
-      // speaker-stat state together before the editor is allowed to close.
-      const refreshed = await refreshMeetingData();
-      if (
-        refreshed.transcriptSegments.some((item) => item.id === segment.id) ||
-        payload.segments.some(
-          (item) => !refreshed.transcriptSegments.some((row) => row.id === item.id)
-        )
-      ) {
-        throw new Error("The transcript refresh did not include the saved split yet.");
-      }
-      if (process.env.NODE_ENV === "development") {
-        console.debug("transcript refetch completed", {
-          originalSegmentId: segment.id,
-          returnedNewSegmentIds: payload.segments.map((item) => item.id)
-        });
+        console.log("closing split editor", { originalSegmentId: segment.id });
       }
       setSegmentSplitId("");
       setSegmentSplitOffset(null);
       setSegmentSplitAssignments([]);
       setSegmentSplitMessage("Segment split saved");
-      const firstCreatedSegmentId = payload.segments[0]?.id;
       requestAnimationFrame(() => {
         const firstCreatedSegment = firstCreatedSegmentId
           ? document.getElementById(`transcript-segment-${firstCreatedSegmentId}`)
           : null;
         firstCreatedSegment?.scrollIntoView({ behavior: "smooth", block: "center" });
         firstCreatedSegment?.focus({ preventScroll: true });
+        if (
+          process.env.NODE_ENV === "development" &&
+          document.querySelector(`[data-split-editor-id="${segment.id}"]`)
+        ) {
+          console.error("BUG: split editor remained open after successful save");
+        }
       });
-      if (process.env.NODE_ENV === "development") {
-        console.debug("split editor closed", {
-          originalSegmentId: segment.id
-        });
-      }
     } catch (splitError) {
       setSpeakerError(
         splitError instanceof Error
@@ -2231,6 +2279,7 @@ export function MeetingDetail({ meetingId }: { meetingId: string }) {
         <div
           aria-modal="true"
           className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/50 p-4"
+          data-split-editor-id={segmentBeingSplit.id}
           role="dialog"
         >
           <div className="max-h-[90vh] w-full max-w-3xl overflow-y-auto rounded-xl bg-white p-6 shadow-xl">

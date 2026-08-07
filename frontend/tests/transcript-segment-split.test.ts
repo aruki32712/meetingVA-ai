@@ -218,6 +218,6 @@ test("split editor exposes preview, speaker controls, and keyboard navigation", 
   assert.match(source, /ArrowLeft/);
   assert.match(source, /ArrowRight/);
   assert.match(source, /Analysis may be outdated because the transcript was edited/);
-  assert.match(source, /analysis_stale: payload\.analysis_stale/);
+  assert.match(source, /analysis_stale: returnedPayload\.analysis_stale/);
   assert.match(source, /transcript-segment-\$\{firstCreatedSegmentId\}/);
 });
