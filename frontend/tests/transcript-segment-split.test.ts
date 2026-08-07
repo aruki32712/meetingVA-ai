@@ -70,7 +70,7 @@ test("failed requests preserve the original segment because updates occur after 
   );
 });
 
-test("successful save refreshes before closing and clears stale editor state", () => {
+test("successful save closes before any secondary refetch and clears stale editor state", () => {
   const source = readFileSync(
     new URL("../components/meeting-detail.tsx", import.meta.url),
     "utf8"
@@ -82,12 +82,13 @@ test("successful save refreshes before closing and clears stale editor state", (
   const refreshIndex = handler.indexOf("await refreshMeetingData()");
   const closeIndex = handler.indexOf('setSegmentSplitId("")');
 
-  assert.ok(refreshIndex > 0 && refreshIndex < closeIndex);
+  assert.ok(closeIndex > 0 && closeIndex < refreshIndex);
   assert.match(handler, /setSegmentSplitOffset\(null\)/);
   assert.match(handler, /setSegmentSplitAssignments\(\[\]\)/);
   assert.match(handler, /refreshed\.transcriptSegments\.some/);
   assert.match(handler, /scrollIntoView/);
   assert.match(handler, /firstCreatedSegment\?\.focus/);
+  assert.match(handler, /Segment split saved, but the transcript could not refresh/);
 });
 
 test("saving state disables both actions and shows Saving text", () => {

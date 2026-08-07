@@ -32,6 +32,7 @@ const replacements = [
 ];
 
 let transcriptRows = [originalSegment];
+let transcriptQueryError: { message: string } | null = null;
 
 function queryResult(table: string) {
   const meeting = {
@@ -71,7 +72,10 @@ function queryResult(table: string) {
               }
             ]
           : [];
-  const result = { data, error: null };
+  const result = {
+    data,
+    error: table === "transcript_segments" ? transcriptQueryError : null
+  };
   const chain = {
     select: () => chain,
     eq: () => chain,
@@ -125,12 +129,14 @@ async function expectCompletedSplit() {
 describe("live Split Segment editor", () => {
   beforeEach(() => {
     transcriptRows = [originalSegment];
+    transcriptQueryError = null;
     Element.prototype.scrollIntoView = vi.fn();
   });
 
   afterEach(() => {
     cleanup();
     vi.restoreAllMocks();
+    vi.unstubAllGlobals();
   });
 
   test("a 200 response replaces the segment and closes the editor", async () => {
@@ -164,5 +170,31 @@ describe("live Split Segment editor", () => {
     const user = await openAndConfigureSplit();
     await user.click(screen.getByRole("button", { name: "Save Split" }));
     await expectCompletedSplit();
+  });
+
+  test("a successful split closes the editor when transcript refetch fails", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        transcriptQueryError = { message: "temporary transcript read failure" };
+        return { ok: true, status: 204, text: async () => "" };
+      })
+    );
+    const user = await openAndConfigureSplit();
+    await user.click(screen.getByRole("button", { name: "Save Split" }));
+
+    await waitFor(() => {
+      expect(screen.queryByRole("dialog")).toBeNull();
+    });
+    expect(screen.queryByRole("button", { name: "Save Split" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Cancel" })).toBeNull();
+    expect(screen.getByText("Segment split saved")).not.toBeNull();
+    expect(
+      await screen.findByText(
+        "Segment split saved, but the transcript could not refresh. Refresh the page to load the latest transcript."
+      )
+    ).not.toBeNull();
+    expect(screen.getByRole("button", { name: "Refresh page" })).not.toBeNull();
   });
 });

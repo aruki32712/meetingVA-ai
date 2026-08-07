@@ -428,6 +428,7 @@ export function MeetingDetail({ meetingId }: { meetingId: string }) {
   >([]);
   const [isSplittingSegment, setIsSplittingSegment] = useState(false);
   const [segmentSplitMessage, setSegmentSplitMessage] = useState("");
+  const [segmentSplitRefreshWarning, setSegmentSplitRefreshWarning] = useState("");
 
   const loadMeeting = useCallback(async () => {
     const supabase = createBrowserSupabaseClient();
@@ -1403,6 +1404,7 @@ export function MeetingDetail({ meetingId }: { meetingId: string }) {
   function openSegmentSplit(segment: TranscriptSegment) {
     setSpeakerError("");
     setSegmentSplitMessage("");
+    setSegmentSplitRefreshWarning("");
     setSegmentSplitId(segment.id);
     setSegmentSplitOffset(null);
     setSegmentSplitAssignments([]);
@@ -1450,15 +1452,18 @@ export function MeetingDetail({ meetingId }: { meetingId: string }) {
     setIsSplittingSegment(true);
     setSpeakerError("");
     setSegmentSplitMessage("");
+    setSegmentSplitRefreshWarning("");
     if (process.env.NODE_ENV === "development") {
-      console.log("split save click", {
-        originalSegmentId: segment.id
-      });
+      console.log("[split] save clicked", { originalSegmentId: segment.id });
     }
     try {
       const accessToken = await getAccessToken();
+      const splitRequestUrl = `${apiBaseUrl}/v1/meetings/${meetingId}/transcript-segments/${segment.id}/split`;
+      if (process.env.NODE_ENV === "development") {
+        console.log("[split] request url", splitRequestUrl);
+      }
       const response = await fetch(
-        `${apiBaseUrl}/v1/meetings/${meetingId}/transcript-segments/${segment.id}/split`,
+        splitRequestUrl,
         {
           method: "POST",
           headers: {
@@ -1498,17 +1503,9 @@ export function MeetingDetail({ meetingId }: { meetingId: string }) {
           ? payload
           : null;
       if (process.env.NODE_ENV === "development") {
-        console.log("split response status", response.status);
-        console.log("split response payload", {
-          originalSegmentId:
-            payload && "original_segment_id" in payload
-              ? payload.original_segment_id
-              : null,
-          returnedNewSegmentIds: returnedPayload?.segments.map((item) => item.id) ?? [],
-          hasParticipants:
-            Boolean(returnedPayload?.participants?.length),
-          analysisStale: returnedPayload?.analysis_stale ?? null
-        });
+        console.log("[split] response status", response.status);
+        console.log("[split] response ok", response.ok);
+        console.log("[split] response payload keys", Object.keys(payload ?? {}));
       }
       if (!response.ok) {
         throw new Error(
@@ -1518,16 +1515,19 @@ export function MeetingDetail({ meetingId }: { meetingId: string }) {
         );
       }
       if (process.env.NODE_ENV === "development") {
-        console.log("split success branch entered");
+        console.log("[split] success branch entered");
       }
 
       let firstCreatedSegmentId = "";
-      const needsParticipantRefetch =
+      const needsSecondaryRefresh =
+        !returnedPayload ||
         segmentSplitAssignments.some((assignment) => assignment.displayName.trim()) &&
         !returnedPayload?.participants?.length;
-      if (returnedPayload && !needsParticipantRefetch) {
+      if (returnedPayload) {
         if (process.env.NODE_ENV === "development") {
-          console.log("refreshing transcript", { source: "split response" });
+          console.log("[split] transcript refresh started", {
+            source: "split response"
+          });
         }
         const updatedSegments = replaceTranscriptSegment(
           transcriptSegments,
@@ -1563,50 +1563,70 @@ export function MeetingDetail({ meetingId }: { meetingId: string }) {
         }
         firstCreatedSegmentId = returnedPayload.segments[0]?.id ?? "";
         if (process.env.NODE_ENV === "development") {
-          console.log("transcript refresh complete", {
+          console.log("[split] transcript refresh finished", {
             source: "split response",
             returnedNewSegmentIds: returnedPayload.segments.map((item) => item.id)
-          });
-        }
-      } else {
-        if (process.env.NODE_ENV === "development") {
-          console.log("refreshing transcript", { source: "supabase refetch" });
-        }
-        const priorSegmentIds = new Set(transcriptSegments.map((item) => item.id));
-        const refreshed = await refreshMeetingData();
-        const replacementSegments = refreshed.transcriptSegments
-          .filter(
-            (item) =>
-              !priorSegmentIds.has(item.id) &&
-              item.segment_index >= segment.segment_index &&
-              item.segment_index < segment.segment_index + parts.length
-          )
-          .sort(
-            (left, right) =>
-              left.segment_index - right.segment_index || left.start_ms - right.start_ms
-          );
-        if (
-          refreshed.transcriptSegments.some((item) => item.id === segment.id) ||
-          replacementSegments.length < parts.length
-        ) {
-          throw new Error("The transcript refresh did not include the saved split yet.");
-        }
-        firstCreatedSegmentId = replacementSegments[0]?.id ?? "";
-        if (process.env.NODE_ENV === "development") {
-          console.log("transcript refresh complete", {
-            source: "supabase refetch",
-            returnedNewSegmentIds: replacementSegments.map((item) => item.id)
           });
         }
       }
 
       if (process.env.NODE_ENV === "development") {
-        console.log("closing split editor", { originalSegmentId: segment.id });
+        console.log("[split] closing editor", { originalSegmentId: segment.id });
       }
       setSegmentSplitId("");
       setSegmentSplitOffset(null);
       setSegmentSplitAssignments([]);
+      setIsSplittingSegment(false);
       setSegmentSplitMessage("Segment split saved");
+
+      if (needsSecondaryRefresh) {
+        if (process.env.NODE_ENV === "development") {
+          console.log("[split] transcript refresh started", {
+            source: "supabase refetch"
+          });
+        }
+        try {
+          const priorSegmentIds = new Set(transcriptSegments.map((item) => item.id));
+          const refreshed = await refreshMeetingData();
+          const replacementSegments = refreshed.transcriptSegments
+            .filter(
+              (item) =>
+                !priorSegmentIds.has(item.id) &&
+                item.segment_index >= segment.segment_index &&
+                item.segment_index < segment.segment_index + parts.length
+            )
+            .sort(
+              (left, right) =>
+                left.segment_index - right.segment_index || left.start_ms - right.start_ms
+            );
+          if (
+            refreshed.transcriptSegments.some((item) => item.id === segment.id) ||
+            replacementSegments.length < parts.length
+          ) {
+            throw new Error("The refreshed transcript is not available yet.");
+          }
+          firstCreatedSegmentId = replacementSegments[0]?.id ?? firstCreatedSegmentId;
+          if (process.env.NODE_ENV === "development") {
+            console.log("[split] transcript refresh finished", {
+              source: "supabase refetch",
+              returnedNewSegmentIds: replacementSegments.map((item) => item.id)
+            });
+          }
+        } catch (refreshError) {
+          setSegmentSplitRefreshWarning(
+            "Segment split saved, but the transcript could not refresh. Refresh the page to load the latest transcript."
+          );
+          if (process.env.NODE_ENV === "development") {
+            console.warn("[split] transcript refresh failed", {
+              message:
+                refreshError instanceof Error
+                  ? refreshError.message
+                  : "Unknown refresh error"
+            });
+          }
+        }
+      }
+
       requestAnimationFrame(() => {
         const firstCreatedSegment = firstCreatedSegmentId
           ? document.getElementById(`transcript-segment-${firstCreatedSegmentId}`)
@@ -2459,6 +2479,19 @@ export function MeetingDetail({ meetingId }: { meetingId: string }) {
         {segmentSplitMessage ? (
           <div className="mt-5 rounded-lg border border-emerald-200 bg-emerald-50 p-4 text-sm text-emerald-800">
             {segmentSplitMessage}
+          </div>
+        ) : null}
+
+        {segmentSplitRefreshWarning ? (
+          <div className="mt-3 flex flex-wrap items-center justify-between gap-3 rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
+            <span>{segmentSplitRefreshWarning}</span>
+            <button
+              className="rounded-md border border-amber-300 bg-white px-3 py-1.5 font-medium text-amber-900 hover:bg-amber-100"
+              type="button"
+              onClick={() => window.location.reload()}
+            >
+              Refresh page
+            </button>
           </div>
         ) : null}
 
