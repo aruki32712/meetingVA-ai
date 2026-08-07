@@ -235,3 +235,55 @@ def test_non_owner_cannot_split_speaker(monkeypatch):
 def test_empty_speaker_split_is_rejected_by_request_validation():
     with pytest.raises(ValidationError):
         main.SplitParticipantRequest(segment_ids=[])
+
+
+def test_unknown_speaker_turn_can_be_reassigned_to_one_new_participant(monkeypatch):
+    client = MemoryClient()
+    client.rows["participants"][0].update(
+        {"display_name": "Unknown Speaker", "speaker_label": "Unknown Speaker"}
+    )
+    for segment in client.rows["transcript_segments"]:
+        segment["speaker_label"] = "Unknown Speaker"
+    before_text = [row["text"] for row in client.rows["transcript_segments"]]
+    authorize(monkeypatch, client)
+
+    response = asyncio.run(
+        main.split_participant(
+            MEETING_ID,
+            SOURCE_ID,
+            main.SplitParticipantRequest(
+                segment_ids=[SEGMENT_TWO], display_name="Jordan"
+            ),
+            authorization="Bearer token",
+        )
+    )
+
+    assert response["participant"]["id"] == NEW_ID
+    assert response["participant"]["display_name"] == "Jordan"
+    assert len(client.rows["participants"]) == 2
+    assert client.rows["transcript_segments"][1]["participant_id"] == NEW_ID
+    assert [row["text"] for row in client.rows["transcript_segments"]] == before_text
+
+
+def test_renaming_participant_updates_display_for_every_associated_turn(monkeypatch):
+    client = MemoryClient()
+    authorize(monkeypatch, client)
+
+    response = asyncio.run(
+        main.update_participant_name(
+            MEETING_ID,
+            SOURCE_ID,
+            main.UpdateParticipantRequest(display_name="Taylor"),
+            authorization="Bearer token",
+        )
+    )
+
+    assert response["participant"]["display_name"] == "Taylor"
+    names_by_participant = {
+        participant["id"]: participant["display_name"]
+        for participant in client.rows["participants"]
+    }
+    assert {
+        names_by_participant[row["participant_id"]]
+        for row in client.rows["transcript_segments"]
+    } == {"Taylor"}
