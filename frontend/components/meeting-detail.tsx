@@ -121,6 +121,12 @@ type TranscriptSegmentSplitResponse = {
   analysis_stale: boolean;
 };
 
+type TranscriptSegmentAssignmentResponse = {
+  participant: Participant;
+  segments: TranscriptSegment[];
+  updated_segment_count: number;
+};
+
 type ActionItem = {
   id: string;
   title: string;
@@ -370,6 +376,9 @@ export function MeetingDetail({ meetingId }: { meetingId: string }) {
   >({});
   const [mergeTargets, setMergeTargets] = useState<Record<string, string>>({});
   const [segmentAssignTargets, setSegmentAssignTargets] = useState<
+    Record<string, string>
+  >({});
+  const [segmentNewSpeakerNames, setSegmentNewSpeakerNames] = useState<
     Record<string, string>
   >({});
   const [actionItems, setActionItems] = useState<ActionItem[]>([]);
@@ -1221,7 +1230,10 @@ export function MeetingDetail({ meetingId }: { meetingId: string }) {
     }
   }
 
-  async function assignSegment(segmentId: string, participantId: string) {
+  async function assignSegment(
+    segmentId: string,
+    assignment: { participantId?: string; displayName?: string }
+  ) {
     setIsSavingSpeaker(true);
     setSpeakerError("");
 
@@ -1237,16 +1249,46 @@ export function MeetingDetail({ meetingId }: { meetingId: string }) {
           },
           body: JSON.stringify({
             segment_ids: [segmentId],
-            target_participant_id: participantId
+            target_participant_id: assignment.participantId || null,
+            display_name: assignment.displayName?.trim() || null
           })
         }
       );
-
+      const payload = (await response.json().catch(() => null)) as
+        | TranscriptSegmentAssignmentResponse
+        | { detail?: string }
+        | null;
       if (!response.ok) {
-        const payload = await response.json().catch(() => null);
-        throw new Error(payload?.detail ?? "Unable to assign transcript segment.");
+        throw new Error(
+          payload && "detail" in payload && payload.detail
+            ? payload.detail
+            : "Unable to assign transcript segment."
+        );
       }
-
+      if (
+        !payload ||
+        !("participant" in payload) ||
+        !("segments" in payload) ||
+        !Array.isArray(payload.segments)
+      ) {
+        throw new Error("The speaker update did not return the updated segment.");
+      }
+      const updatedById = new Map(payload.segments.map((segment) => [segment.id, segment]));
+      setTranscriptSegments((current) =>
+        current.map((segment) => updatedById.get(segment.id) ?? segment)
+      );
+      setParticipants((current) => {
+        const byId = new Map(current.map((participant) => [participant.id, participant]));
+        byId.set(payload.participant.id, payload.participant);
+        return [...byId.values()].sort((left, right) =>
+          left.created_at.localeCompare(right.created_at)
+        );
+      });
+      setSegmentAssignTargets((current) => ({
+        ...current,
+        [segmentId]: payload.participant.id
+      }));
+      setSegmentNewSpeakerNames((current) => ({ ...current, [segmentId]: "" }));
       await refreshMeetingData();
     } catch (assignError) {
       setSpeakerError(
@@ -2400,16 +2442,16 @@ export function MeetingDetail({ meetingId }: { meetingId: string }) {
                   }
                   onClick={() => openSegmentSplit(segment)}
                 >
-                  Split segment
+                  Split Segment
                 </button>
-                {participants.length > 1 ? (
-                  <div className="mt-3">
+                <div className="mt-3 rounded-md border border-slate-200 bg-white p-3">
                     <label
-                      className="sr-only"
+                      className="block text-xs font-semibold uppercase tracking-wide text-slate-500"
                       htmlFor={`assign-segment-${segment.id}`}
                     >
-                      Assign transcript segment
+                      Change Speaker
                     </label>
+                    <div className="mt-2 flex flex-col gap-2 sm:flex-row">
                     <select
                       className="w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-ink outline-none transition focus:border-signal focus:ring-2 focus:ring-blue-100 sm:w-auto"
                       id={`assign-segment-${segment.id}`}
@@ -2426,8 +2468,12 @@ export function MeetingDetail({ meetingId }: { meetingId: string }) {
                           [segment.id]: participantId
                         }));
 
-                        if (participantId) {
-                          void assignSegment(segment.id, participantId);
+                        if (participantId === "__unknown__") {
+                          void assignSegment(segment.id, {
+                            displayName: "Unknown Speaker"
+                          });
+                        } else if (participantId && participantId !== "__new__") {
+                          void assignSegment(segment.id, { participantId });
                         }
                       }}
                     >
@@ -2436,9 +2482,49 @@ export function MeetingDetail({ meetingId }: { meetingId: string }) {
                           {participant.display_name || fallbackSpeakerName(index)}
                         </option>
                       ))}
+                      {!participants.some(
+                        (participant) =>
+                          participant.display_name === "Unknown Speaker" ||
+                          participant.speaker_label === "Unknown Speaker"
+                      ) ? (
+                        <option value="__unknown__">Unknown Speaker</option>
+                      ) : null}
+                      <option value="__new__">Create a new speaker…</option>
                     </select>
+                    {segmentAssignTargets[segment.id] === "__new__" ? (
+                      <>
+                        <input
+                          aria-label="New speaker name"
+                          className="w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-ink outline-none transition focus:border-signal focus:ring-2 focus:ring-blue-100 sm:w-auto sm:flex-1"
+                          disabled={isSavingSpeaker}
+                          placeholder="New speaker name"
+                          value={segmentNewSpeakerNames[segment.id] ?? ""}
+                          onChange={(event) =>
+                            setSegmentNewSpeakerNames((current) => ({
+                              ...current,
+                              [segment.id]: event.target.value
+                            }))
+                          }
+                        />
+                        <button
+                          className="rounded-md bg-signal px-3 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:bg-slate-300"
+                          type="button"
+                          disabled={
+                            isSavingSpeaker ||
+                            !(segmentNewSpeakerNames[segment.id] ?? "").trim()
+                          }
+                          onClick={() =>
+                            void assignSegment(segment.id, {
+                              displayName: segmentNewSpeakerNames[segment.id]
+                            })
+                          }
+                        >
+                          Add speaker
+                        </button>
+                      </>
+                    ) : null}
+                    </div>
                   </div>
-                ) : null}
               </article>
             ))}
           </div>

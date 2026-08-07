@@ -3329,6 +3329,21 @@ async def assign_transcript_segments(
     _require_owned_meeting(service_client, meeting_id, user_id)
     unique_segment_ids = list(dict.fromkeys(payload.segment_ids))
 
+    segments_response = (
+        service_client.table("transcript_segments")
+        .select("id")
+        .eq("meeting_id", meeting_id)
+        .in_("id", unique_segment_ids)
+        .execute()
+    )
+    matched_segment_ids = [segment["id"] for segment in segments_response.data or []]
+
+    if len(matched_segment_ids) != len(unique_segment_ids):
+        raise HTTPException(
+            status_code=404,
+            detail="One or more transcript segments were not found.",
+        )
+
     if payload.target_participant_id:
         participant = _require_participant(
             service_client,
@@ -3351,21 +3366,6 @@ async def assign_transcript_segments(
             speaker_label=display_name,
         )
 
-    segments_response = (
-        service_client.table("transcript_segments")
-        .select("id")
-        .eq("meeting_id", meeting_id)
-        .in_("id", unique_segment_ids)
-        .execute()
-    )
-    matched_segment_ids = [segment["id"] for segment in segments_response.data or []]
-
-    if len(matched_segment_ids) != len(unique_segment_ids):
-        raise HTTPException(
-            status_code=404,
-            detail="One or more transcript segments were not found.",
-        )
-
     updated = (
         service_client.table("transcript_segments")
         .update(
@@ -3380,7 +3380,19 @@ async def assign_transcript_segments(
         .execute()
     )
     updated_segment_count = len(updated.data or [])
+    updated_segments = (
+        service_client.table("transcript_segments")
+        .select(
+            "id,participant_id,speaker_label,start_ms,end_ms,text,original_text,"
+            "translated_text,transcript_kind,segment_index"
+        )
+        .eq("meeting_id", meeting_id)
+        .in_("id", matched_segment_ids)
+        .order("segment_index")
+        .execute()
+    ).data or []
     return {
         "participant": participant,
+        "segments": updated_segments,
         "updated_segment_count": updated_segment_count,
     }

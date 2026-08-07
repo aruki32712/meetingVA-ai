@@ -136,6 +136,41 @@ test("split completion refetches every direct meeting-detail data dependency", (
   assert.doesNotMatch(source, /useQuery|useSWR|queryClient/);
 });
 
+test("every transcript row exposes Change Speaker and Split Segment", () => {
+  const source = readFileSync(
+    new URL("../components/meeting-detail.tsx", import.meta.url),
+    "utf8"
+  );
+  const transcriptRow = source.slice(
+    source.indexOf("{transcriptSegments.map((segment)"),
+    source.indexOf("</article>", source.indexOf("{transcriptSegments.map((segment)"))
+  );
+
+  assert.match(transcriptRow, /Change Speaker/);
+  assert.match(transcriptRow, /Split Segment/);
+  assert.doesNotMatch(transcriptRow, /participants\.length > 1/);
+});
+
+test("whole-segment reassignment supports existing, unknown, and new speakers", () => {
+  const source = readFileSync(
+    new URL("../components/meeting-detail.tsx", import.meta.url),
+    "utf8"
+  );
+  const handler = source.slice(
+    source.indexOf("async function assignSegment"),
+    source.indexOf("function openSpeakerSplit")
+  );
+
+  assert.match(source, /Unknown Speaker<\/option>/);
+  assert.match(source, /Create a new speaker…<\/option>/);
+  assert.match(source, /Add speaker/);
+  assert.match(handler, /target_participant_id: assignment\.participantId \|\| null/);
+  assert.match(handler, /display_name: assignment\.displayName\?\.trim\(\) \|\| null/);
+  assert.match(handler, /setTranscriptSegments/);
+  assert.match(handler, /setParticipants/);
+  assert.ok(handler.indexOf("setTranscriptSegments") < handler.indexOf("await refreshMeetingData()"));
+});
+
 test("successful split immediately replaces the original in segment order", () => {
   const originalSegment = {
     id: "original",
@@ -176,7 +211,7 @@ test("split editor exposes preview, speaker controls, and keyboard navigation", 
     new URL("../components/meeting-detail.tsx", import.meta.url),
     "utf8"
   );
-  assert.match(source, /Split segment/);
+  assert.match(source, /Split Segment/);
   assert.match(source, /Choose a split boundary/);
   assert.match(source, /Speaker for part/);
   assert.match(source, /Save Split/);
