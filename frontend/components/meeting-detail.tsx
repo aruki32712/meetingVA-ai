@@ -649,6 +649,7 @@ export function MeetingDetail({ meetingId }: { meetingId: string }) {
     } else if (analysisJob?.status === "analyzed") {
       setAnalysisError("");
     }
+    return result;
   }, [loadMeeting]);
 
   useEffect(() => {
@@ -1406,7 +1407,12 @@ export function MeetingDetail({ meetingId }: { meetingId: string }) {
 
     setIsSplittingSegment(true);
     setSpeakerError("");
-    const scrollPosition = window.scrollY;
+    setSegmentSplitMessage("");
+    if (process.env.NODE_ENV === "development") {
+      console.debug("split request started", {
+        originalSegmentId: segment.id
+      });
+    }
     try {
       const accessToken = await getAccessToken();
       const response = await fetch(
@@ -1432,6 +1438,16 @@ export function MeetingDetail({ meetingId }: { meetingId: string }) {
         | TranscriptSegmentSplitResponse
         | { detail?: string }
         | null;
+      if (process.env.NODE_ENV === "development") {
+        console.debug("split response received", {
+          originalSegmentId: segment.id,
+          responseStatus: response.status,
+          returnedNewSegmentIds:
+            payload && "segments" in payload && Array.isArray(payload.segments)
+              ? payload.segments.map((item) => item.id)
+              : []
+        });
+      }
       if (!response.ok) {
         throw new Error(
           payload && "detail" in payload && payload.detail
@@ -1475,38 +1491,45 @@ export function MeetingDetail({ meetingId }: { meetingId: string }) {
         });
       }
       if (process.env.NODE_ENV === "development") {
-        console.debug("transcript segment split applied", {
-          originalSegmentId: segment.id,
-          returnedSegmentIds: payload.segments.map((item) => item.id),
-          returnedSegmentCount: payload.segments.length,
-          postUpdateLocalTranscriptCount: updatedSegments.length
+        console.debug("transcript refetch started", {
+          originalSegmentId: segment.id
         });
       }
-      try {
-        await refreshMeetingData();
-      } catch (refreshError) {
-        if (process.env.NODE_ENV === "development") {
-          console.warn("split saved but meeting detail refresh failed", {
-            originalSegmentId: segment.id,
-            error:
-              refreshError instanceof Error
-                ? refreshError.message
-                : "Unknown refresh error"
-          });
-        }
+      // This screen reads Supabase directly and has no React Query/SWR cache.
+      // Reloading invalidates meeting, transcript, participant, and derived
+      // speaker-stat state together before the editor is allowed to close.
+      const refreshed = await refreshMeetingData();
+      if (
+        refreshed.transcriptSegments.some((item) => item.id === segment.id) ||
+        payload.segments.some(
+          (item) => !refreshed.transcriptSegments.some((row) => row.id === item.id)
+        )
+      ) {
+        throw new Error("The transcript refresh did not include the saved split yet.");
+      }
+      if (process.env.NODE_ENV === "development") {
+        console.debug("transcript refetch completed", {
+          originalSegmentId: segment.id,
+          returnedNewSegmentIds: payload.segments.map((item) => item.id)
+        });
       }
       setSegmentSplitId("");
       setSegmentSplitOffset(null);
       setSegmentSplitAssignments([]);
-      setSegmentSplitMessage("Segment split saved.");
+      setSegmentSplitMessage("Segment split saved");
       const firstCreatedSegmentId = payload.segments[0]?.id;
       requestAnimationFrame(() => {
         const firstCreatedSegment = firstCreatedSegmentId
           ? document.getElementById(`transcript-segment-${firstCreatedSegmentId}`)
           : null;
+        firstCreatedSegment?.scrollIntoView({ behavior: "smooth", block: "center" });
         firstCreatedSegment?.focus({ preventScroll: true });
-        window.scrollTo({ top: scrollPosition });
       });
+      if (process.env.NODE_ENV === "development") {
+        console.debug("split editor closed", {
+          originalSegmentId: segment.id
+        });
+      }
     } catch (splitError) {
       setSpeakerError(
         splitError instanceof Error
@@ -2304,7 +2327,7 @@ export function MeetingDetail({ meetingId }: { meetingId: string }) {
                 }
                 onClick={() => void saveSegmentSplit()}
               >
-                {isSplittingSegment ? "Saving split…" : "Save Split"}
+                {isSplittingSegment ? "Saving…" : "Save Split"}
               </button>
             </div>
           </div>

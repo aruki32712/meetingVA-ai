@@ -63,11 +63,77 @@ test("failed requests preserve the original segment because updates occur after 
   );
   assert.ok(handler.indexOf("if (!response.ok)") < handler.indexOf("await refreshMeetingData()"));
   assert.doesNotMatch(handler.slice(0, handler.indexOf("if (!response.ok)")), /setTranscriptSegments/);
-  assert.match(handler, /setSegmentSplitMessage\("Segment split saved\."\)/);
+  assert.match(handler, /setSegmentSplitMessage\("Segment split saved"\)/);
   assert.ok(
     handler.indexOf("if (!response.ok)") <
-      handler.indexOf('setSegmentSplitMessage("Segment split saved.")')
+      handler.indexOf('setSegmentSplitMessage("Segment split saved")')
   );
+});
+
+test("successful save refreshes before closing and clears stale editor state", () => {
+  const source = readFileSync(
+    new URL("../components/meeting-detail.tsx", import.meta.url),
+    "utf8"
+  );
+  const handler = source.slice(
+    source.indexOf("async function saveSegmentSplit"),
+    source.indexOf("if (isLoading)")
+  );
+  const refreshIndex = handler.indexOf("await refreshMeetingData()");
+  const closeIndex = handler.indexOf('setSegmentSplitId("")');
+
+  assert.ok(refreshIndex > 0 && refreshIndex < closeIndex);
+  assert.match(handler, /setSegmentSplitOffset\(null\)/);
+  assert.match(handler, /setSegmentSplitAssignments\(\[\]\)/);
+  assert.match(handler, /refreshed\.transcriptSegments\.some/);
+  assert.match(handler, /scrollIntoView/);
+  assert.match(handler, /firstCreatedSegment\?\.focus/);
+});
+
+test("saving state disables both actions and shows Saving text", () => {
+  const source = readFileSync(
+    new URL("../components/meeting-detail.tsx", import.meta.url),
+    "utf8"
+  );
+  const modal = source.slice(
+    source.indexOf("{segmentBeingSplit ?"),
+    source.indexOf('<section\n        className="rounded-lg', source.indexOf("{segmentBeingSplit ?"))
+  );
+
+  assert.equal((modal.match(/disabled=\{isSplittingSegment\}/g) ?? []).length >= 1, true);
+  assert.match(modal, /isSplittingSegment \|\|/);
+  assert.match(modal, /isSplittingSegment \? "Saving…" : "Save Split"/);
+});
+
+test("failure keeps editor selections and does not show success", () => {
+  const source = readFileSync(
+    new URL("../components/meeting-detail.tsx", import.meta.url),
+    "utf8"
+  );
+  const handler = source.slice(
+    source.indexOf("async function saveSegmentSplit"),
+    source.indexOf("if (isLoading)")
+  );
+  const catchBlock = handler.slice(handler.indexOf("} catch (splitError)"));
+
+  assert.doesNotMatch(catchBlock, /setSegmentSplitId\(""\)/);
+  assert.doesNotMatch(catchBlock, /setSegmentSplitAssignments\(\[\]\)/);
+  assert.doesNotMatch(catchBlock, /Segment split saved/);
+  assert.match(catchBlock, /setIsSplittingSegment\(false\)/);
+});
+
+test("split completion refetches every direct meeting-detail data dependency", () => {
+  const source = readFileSync(
+    new URL("../components/meeting-detail.tsx", import.meta.url),
+    "utf8"
+  );
+
+  assert.match(source, /const refreshed = await refreshMeetingData\(\)/);
+  assert.match(source, /\.from\("meetings"\)/);
+  assert.match(source, /\.from\("transcript_segments"\)/);
+  assert.match(source, /\.from\("participants"\)/);
+  assert.match(source, /transcriptSpeakerStats\(transcriptSegments\)/);
+  assert.doesNotMatch(source, /useQuery|useSWR|queryClient/);
 });
 
 test("successful split immediately replaces the original in segment order", () => {
