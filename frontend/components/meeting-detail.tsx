@@ -180,7 +180,10 @@ type TranscriptionJob = {
 };
 
 const apiBaseUrl =
-  process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000";
+  process.env.NEXT_PUBLIC_API_BASE_URL ??
+  (process.env.NODE_ENV === "production"
+    ? "https://meetingva-backend-r2mw.onrender.com"
+    : "http://localhost:8000");
 const jobPollIntervalMs = 5000;
 
 function formatTranscriptTime(milliseconds: number) {
@@ -1453,15 +1456,11 @@ export function MeetingDetail({ meetingId }: { meetingId: string }) {
     setSpeakerError("");
     setSegmentSplitMessage("");
     setSegmentSplitRefreshWarning("");
-    if (process.env.NODE_ENV === "development") {
-      console.log("[split] save clicked", { originalSegmentId: segment.id });
-    }
+    console.log("[split] save clicked", { originalSegmentId: segment.id });
     try {
       const accessToken = await getAccessToken();
       const splitRequestUrl = `${apiBaseUrl}/v1/meetings/${meetingId}/transcript-segments/${segment.id}/split`;
-      if (process.env.NODE_ENV === "development") {
-        console.log("[split] request url", splitRequestUrl);
-      }
+      console.log("[split] request url", splitRequestUrl);
       const response = await fetch(
         splitRequestUrl,
         {
@@ -1502,11 +1501,9 @@ export function MeetingDetail({ meetingId }: { meetingId: string }) {
         payload.original_segment_id === segment.id
           ? payload
           : null;
-      if (process.env.NODE_ENV === "development") {
-        console.log("[split] response status", response.status);
-        console.log("[split] response ok", response.ok);
-        console.log("[split] response payload keys", Object.keys(payload ?? {}));
-      }
+      console.log("[split] response status", response.status);
+      console.log("[split] response ok", response.ok);
+      console.log("[split] response payload keys", Object.keys(payload ?? {}));
       if (!response.ok) {
         throw new Error(
           payload && "detail" in payload && payload.detail
@@ -1514,9 +1511,7 @@ export function MeetingDetail({ meetingId }: { meetingId: string }) {
             : "Unable to split transcript segment."
         );
       }
-      if (process.env.NODE_ENV === "development") {
-        console.log("[split] success branch entered");
-      }
+      console.log("[split] success branch entered");
 
       let firstCreatedSegmentId = "";
       const needsSecondaryRefresh =
@@ -1524,11 +1519,9 @@ export function MeetingDetail({ meetingId }: { meetingId: string }) {
         segmentSplitAssignments.some((assignment) => assignment.displayName.trim()) &&
         !returnedPayload?.participants?.length;
       if (returnedPayload) {
-        if (process.env.NODE_ENV === "development") {
-          console.log("[split] transcript refresh started", {
-            source: "split response"
-          });
-        }
+        console.log("[split] transcript refresh started", {
+          source: "split response"
+        });
         const updatedSegments = replaceTranscriptSegment(
           transcriptSegments,
           segment.id,
@@ -1562,17 +1555,13 @@ export function MeetingDetail({ meetingId }: { meetingId: string }) {
           });
         }
         firstCreatedSegmentId = returnedPayload.segments[0]?.id ?? "";
-        if (process.env.NODE_ENV === "development") {
-          console.log("[split] transcript refresh finished", {
-            source: "split response",
-            returnedNewSegmentIds: returnedPayload.segments.map((item) => item.id)
-          });
-        }
+        console.log("[split] transcript refresh complete", {
+          source: "split response",
+          returnedNewSegmentIds: returnedPayload.segments.map((item) => item.id)
+        });
       }
 
-      if (process.env.NODE_ENV === "development") {
-        console.log("[split] closing editor", { originalSegmentId: segment.id });
-      }
+      console.log("[split] closing editor", { originalSegmentId: segment.id });
       setSegmentSplitId("");
       setSegmentSplitOffset(null);
       setSegmentSplitAssignments([]);
@@ -1580,11 +1569,9 @@ export function MeetingDetail({ meetingId }: { meetingId: string }) {
       setSegmentSplitMessage("Segment split saved");
 
       if (needsSecondaryRefresh) {
-        if (process.env.NODE_ENV === "development") {
-          console.log("[split] transcript refresh started", {
-            source: "supabase refetch"
-          });
-        }
+        console.log("[split] transcript refresh started", {
+          source: "supabase refetch"
+        });
         try {
           const priorSegmentIds = new Set(transcriptSegments.map((item) => item.id));
           const refreshed = await refreshMeetingData();
@@ -1606,12 +1593,10 @@ export function MeetingDetail({ meetingId }: { meetingId: string }) {
             throw new Error("The refreshed transcript is not available yet.");
           }
           firstCreatedSegmentId = replacementSegments[0]?.id ?? firstCreatedSegmentId;
-          if (process.env.NODE_ENV === "development") {
-            console.log("[split] transcript refresh finished", {
-              source: "supabase refetch",
-              returnedNewSegmentIds: replacementSegments.map((item) => item.id)
-            });
-          }
+          console.log("[split] transcript refresh complete", {
+            source: "supabase refetch",
+            returnedNewSegmentIds: replacementSegments.map((item) => item.id)
+          });
         } catch (refreshError) {
           setSegmentSplitRefreshWarning(
             "Segment split saved, but the transcript could not refresh. Refresh the page to load the latest transcript."
@@ -2307,6 +2292,14 @@ export function MeetingDetail({ meetingId }: { meetingId: string }) {
             <p className="mt-1 text-sm text-slate-600">
               Choose the word where the next speaker begins, preview both parts, and assign a speaker to each.
             </p>
+            {speakerError ? (
+              <div
+                className="mt-4 rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700"
+                role="alert"
+              >
+                {speakerError}
+              </div>
+            ) : null}
             <div className="mt-5 rounded-lg border border-slate-200 bg-slate-50 p-4 text-sm leading-7 text-ink">
               {segmentBeingSplit.text}
             </div>

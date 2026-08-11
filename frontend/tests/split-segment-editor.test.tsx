@@ -197,4 +197,21 @@ describe("live Split Segment editor", () => {
     ).not.toBeNull();
     expect(screen.getByRole("button", { name: "Refresh page" })).not.toBeNull();
   });
+
+  test("a split request failure remains editable and shows the error in the modal", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        throw new Error("Unable to reach the meeting API.");
+      })
+    );
+    const user = await openAndConfigureSplit();
+    await user.click(screen.getByRole("button", { name: "Save Split" }));
+
+    expect((await screen.findByRole("alert")).textContent).toContain(
+      "Unable to reach the meeting API."
+    );
+    expect(screen.getByRole("button", { name: "Save Split" })).not.toBeNull();
+    expect(screen.getByRole("button", { name: "Cancel" })).not.toBeNull();
+  });
 });

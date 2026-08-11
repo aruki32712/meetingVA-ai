@@ -137,6 +137,20 @@ test("split completion refetches every direct meeting-detail data dependency", (
   assert.doesNotMatch(source, /useQuery|useSWR|queryClient/);
 });
 
+test("production split requests never fall back to browser localhost", () => {
+  const source = readFileSync(
+    new URL("../components/meeting-detail.tsx", import.meta.url),
+    "utf8"
+  );
+
+  assert.match(source, /process\.env\.NODE_ENV === "production"/);
+  assert.match(source, /https:\/\/meetingva-backend-r2mw\.onrender\.com/);
+  assert.match(source, /\[split\] response status/);
+  assert.match(source, /\[split\] response ok/);
+  assert.match(source, /\[split\] success branch entered/);
+  assert.match(source, /\[split\] closing editor/);
+});
+
 test("every transcript row exposes Change Speaker and Split Segment", () => {
   const source = readFileSync(
     new URL("../components/meeting-detail.tsx", import.meta.url),
