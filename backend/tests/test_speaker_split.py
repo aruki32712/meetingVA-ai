@@ -144,6 +144,7 @@ def authorize(monkeypatch, client):
         "_require_owned_meeting",
         lambda service_client, meeting_id, user_id: {"id": meeting_id},
     )
+    monkeypatch.setattr(main, "_mark_transcript_manually_edited", lambda *args, **kwargs: 2)
 
 
 def test_split_selected_turns_creates_participant_and_preserves_content(monkeypatch):

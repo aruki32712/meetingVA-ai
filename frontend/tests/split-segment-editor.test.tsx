@@ -49,6 +49,8 @@ function queryResult(table: string) {
     summary_translated: null,
     brief_translated: null,
     analysis_stale: false,
+    transcript_revision: 1,
+    analysis_revision: 1,
     detected_language: "en",
     transcript_language: "en",
     translation_language: null,
@@ -140,9 +142,19 @@ describe("live Split Segment editor", () => {
   });
 
   test("a 200 response replaces the segment and closes the editor", async () => {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async () => ({
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      if (String(input).endsWith("/analyze")) {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            meeting_id: "meeting-1",
+            job_id: "analysis-job-1",
+            processing_status: "queued"
+          })
+        };
+      }
+      return {
         ok: true,
         status: 200,
         text: async () =>
@@ -150,19 +162,41 @@ describe("live Split Segment editor", () => {
             original_segment_id: originalSegment.id,
             segments: replacements,
             participants: [],
-            analysis_stale: true
+            analysis_stale: true,
+            transcript_revision: 2
           })
-      }))
+      };
+    });
+    vi.stubGlobal(
+      "fetch",
+      fetchMock
     );
     const user = await openAndConfigureSplit();
     await user.click(screen.getByRole("button", { name: "Save Split" }));
     await expectCompletedSplit();
+    await waitFor(() => {
+      expect(fetchMock.mock.calls.some(([url]) => String(url).endsWith("/analyze"))).toBe(
+        true
+      );
+    });
+    expect(screen.getByText("Updating analysis...")).not.toBeNull();
   });
 
   test("a 204 response refetches replacements and closes the editor", async () => {
     vi.stubGlobal(
       "fetch",
-      vi.fn(async () => {
+      vi.fn(async (input: RequestInfo | URL) => {
+        if (String(input).endsWith("/analyze")) {
+          return {
+            ok: true,
+            status: 200,
+            json: async () => ({
+              meeting_id: "meeting-1",
+              job_id: "analysis-job-204",
+              processing_status: "queued"
+            })
+          };
+        }
         transcriptRows = replacements;
         return { ok: true, status: 204, text: async () => "" };
       })

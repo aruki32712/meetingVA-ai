@@ -75,6 +75,7 @@ def authorize(monkeypatch, client):
     monkeypatch.setattr(main, "_require_bearer_token", lambda value: "token")
     monkeypatch.setattr(main, "_require_user_id", lambda value: "owner")
     monkeypatch.setattr(main, "_require_owned_meeting", lambda *args: {"id": MEETING_ID})
+    monkeypatch.setattr(main, "_mark_transcript_manually_edited", lambda *args, **kwargs: 2)
 
 
 def participant(participant_id, display_name):

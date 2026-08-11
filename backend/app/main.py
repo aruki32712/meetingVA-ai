@@ -115,6 +115,18 @@ class UpdateParticipantRequest(BaseModel):
         return display_name
 
 
+class UpdateTranscriptSegmentRequest(BaseModel):
+    text: str = Field(min_length=1)
+
+    @field_validator("text")
+    @classmethod
+    def text_must_have_content(cls, value: str) -> str:
+        text = " ".join(value.split())
+        if not text:
+            raise ValueError("Transcript text cannot be empty.")
+        return text
+
+
 class MergeParticipantsRequest(BaseModel):
     source_participant_id: str
     target_participant_id: str
@@ -1158,20 +1170,37 @@ def _create_processing_job(
     job_id: str,
     meeting_id: str,
     job_type: str,
+    transcript_revision: int | None = None,
 ) -> None:
+    values = {
+        "id": job_id,
+        "meeting_id": meeting_id,
+        "job_type": job_type,
+        "status": "queued",
+        "worker_version": settings.worker_version,
+    }
+    if transcript_revision is not None:
+        values["transcript_revision"] = transcript_revision
     (
         service_client.table("processing_jobs")
-        .insert(
-            {
-                "id": job_id,
-                "meeting_id": meeting_id,
-                "job_type": job_type,
-                "status": "queued",
-                "worker_version": settings.worker_version,
-            }
-        )
+        .insert(values)
         .execute()
     )
+
+
+def _mark_transcript_manually_edited(
+    service_client: Any, *, meeting_id: str, owner_id: str
+) -> int:
+    response = service_client.rpc(
+        "mark_transcript_manually_edited",
+        {"p_meeting_id": meeting_id, "p_owner_id": owner_id},
+    ).execute()
+    value = response.data
+    if isinstance(value, list):
+        value = value[0] if value else None
+    if not isinstance(value, int):
+        raise RuntimeError("Transcript revision was not updated.")
+    return value
 
 
 def _get_processing_job(
@@ -2532,6 +2561,7 @@ async def _run_analyze_meeting_job(
     *,
     meeting_id: str,
     job_id: str | None = None,
+    transcript_revision: int | None = None,
 ) -> dict[str, Any]:
     service_client = get_supabase_service_client()
 
@@ -2544,7 +2574,7 @@ async def _run_analyze_meeting_job(
 
     meeting_response = (
         service_client.table("meetings")
-        .select("id,title,transcript_language,detected_language")
+        .select("id,title,transcript_language,detected_language,transcript_revision")
         .eq("id", meeting_id)
         .limit(1)
         .execute()
@@ -2553,6 +2583,16 @@ async def _run_analyze_meeting_job(
 
     if not meeting:
         raise RuntimeError("Meeting was not found.")
+
+    current_revision = int(meeting.get("transcript_revision") or 1)
+    expected_revision = transcript_revision or current_revision
+    if current_revision != expected_revision:
+        return {
+            "meeting_id": meeting_id,
+            "job_id": job_id,
+            "processing_status": "cancelled",
+            "transcript_revision": expected_revision,
+        }
 
     transcript_response = (
         service_client.table("transcript_segments")
@@ -2577,29 +2617,28 @@ async def _run_analyze_meeting_job(
         )
         rows = _build_analysis_rows(meeting_id, analysis)
 
-        for table_name in ("action_items", "decisions", "questions"):
-            (
-                service_client.table(table_name)
-                .delete()
-                .eq("meeting_id", meeting_id)
-                .execute()
-            )
-
-            if rows[table_name]:
-                service_client.table(table_name).insert(rows[table_name]).execute()
-
-        (
-            service_client.table("meetings")
-            .update(
-                {
-                    "summary": analysis["executive_summary"],
-                    "brief": analysis["meeting_brief"],
-                    "analysis_stale": False,
-                }
-            )
-            .eq("id", meeting_id)
-            .execute()
-        )
+        commit = service_client.rpc(
+            "commit_meeting_analysis",
+            {
+                "p_meeting_id": meeting_id,
+                "p_transcript_revision": expected_revision,
+                "p_summary": analysis["executive_summary"],
+                "p_brief": analysis["meeting_brief"],
+                "p_action_items": rows["action_items"],
+                "p_decisions": rows["decisions"],
+                "p_questions": rows["questions"],
+            },
+        ).execute()
+        committed = commit.data
+        if isinstance(committed, list):
+            committed = committed[0] if committed else False
+        if committed is not True:
+            return {
+                "meeting_id": meeting_id,
+                "job_id": job_id,
+                "processing_status": "cancelled",
+                "transcript_revision": expected_revision,
+            }
     except Exception as exc:
         safe_error = _sanitize_processing_error_message(exc)
         try:
@@ -2623,6 +2662,7 @@ async def _run_analyze_meeting_job(
         "meeting_id": meeting_id,
         "job_id": job_id,
         "processing_status": "analyzed",
+        "transcript_revision": expected_revision,
         "action_item_count": len(rows["action_items"]),
         "decision_count": len(rows["decisions"]),
         "question_count": len(rows["questions"]),
@@ -2684,7 +2724,26 @@ async def analyze_meeting(
     service_client = get_supabase_service_client()
     user_id = _require_user_id(token)
     _enforce_ai_rate_limit(user_id, "analyze")
-    _require_owned_meeting(service_client, meeting_id, user_id)
+    meeting = _require_owned_meeting(service_client, meeting_id, user_id)
+
+    active_analysis = (
+        service_client.table("processing_jobs")
+        .select("id,status,transcript_revision")
+        .eq("meeting_id", meeting_id)
+        .eq("job_type", "analysis")
+        .in_("status", ["queued", "analyzing"])
+        .order("created_at", desc=True)
+        .limit(1)
+        .execute()
+    )
+    if active_analysis.data:
+        job = active_analysis.data[0]
+        return {
+            "meeting_id": meeting_id,
+            "job_id": job["id"],
+            "processing_status": job["status"],
+        }
+
     _ensure_not_processing(service_client, meeting_id)
 
     transcript_response = (
@@ -2699,17 +2758,23 @@ async def analyze_meeting(
         raise HTTPException(status_code=400, detail="Meeting has no transcript.")
 
     job_id = str(uuid4())
+    transcript_revision = int(meeting.get("transcript_revision") or 1)
     _create_processing_job(
         service_client,
         job_id=job_id,
         meeting_id=meeting_id,
         job_type="analysis",
+        transcript_revision=transcript_revision,
     )
     from app.workers.analysis_worker import analyze_meeting_task
 
     try:
         analyze_meeting_task.apply_async(
-            kwargs={"meeting_id": meeting_id, "processing_job_id": job_id},
+            kwargs={
+                "meeting_id": meeting_id,
+                "processing_job_id": job_id,
+                "transcript_revision": transcript_revision,
+            },
             task_id=job_id,
         )
     except Exception as exc:
@@ -3016,7 +3081,14 @@ async def update_participant_name(
         .eq("meeting_id", meeting_id)
         .execute()
     )
-    return {"participant": updated.data[0]}
+    transcript_revision = _mark_transcript_manually_edited(
+        service_client, meeting_id=meeting_id, owner_id=user_id
+    )
+    return {
+        "participant": updated.data[0],
+        "analysis_stale": True,
+        "transcript_revision": transcript_revision,
+    }
 
 
 @app.post("/v1/meetings/{meeting_id}/participants/merge", tags=["speakers"])
@@ -3073,10 +3145,15 @@ async def merge_participants(
         .eq("meeting_id", meeting_id)
         .execute()
     )
+    transcript_revision = _mark_transcript_manually_edited(
+        service_client, meeting_id=meeting_id, owner_id=user_id
+    )
     return {
         "target_participant_id": target["id"],
         "merged_participant_id": source["id"],
         "updated_segment_count": updated_segment_count,
+        "analysis_stale": True,
+        "transcript_revision": transcript_revision,
     }
 
 
@@ -3182,11 +3259,16 @@ async def split_participant(
             status_code=409,
             detail="The transcript changed before the speaker could be split. Please retry.",
         )
+    transcript_revision = _mark_transcript_manually_edited(
+        service_client, meeting_id=meeting_id, owner_id=user_id
+    )
     return {
         "participant": participant,
         "source_participant_id": source_participant["id"],
         "segment_ids": unique_segment_ids,
         "updated_segment_count": len(updated.data or []),
+        "analysis_stale": True,
+        "transcript_revision": transcript_revision,
     }
 
 
@@ -3251,7 +3333,7 @@ async def split_transcript_segment(
     try:
         result = (
             service_client.rpc(
-                "split_transcript_segment",
+                "split_transcript_segment_revisioned",
                 {
                     "p_meeting_id": meeting_id,
                     "p_segment_id": segment_id,
@@ -3302,6 +3384,42 @@ async def split_transcript_segment(
         "original_segment_id": segment_id,
         "segments": created_segments,
         "analysis_stale": bool(data.get("analysis_stale")),
+        "transcript_revision": int(data.get("transcript_revision") or 1),
+    }
+
+
+@app.patch(
+    "/v1/meetings/{meeting_id}/transcript-segments/{segment_id}",
+    tags=["speakers"],
+)
+async def update_transcript_segment_text(
+    meeting_id: str,
+    segment_id: str,
+    payload: UpdateTranscriptSegmentRequest,
+    authorization: str | None = Header(default=None),
+) -> dict[str, Any]:
+    meeting_id = _validate_uuid(meeting_id, "meeting_id")
+    segment_id = _validate_uuid(segment_id, "segment_id")
+    token = _require_bearer_token(authorization)
+    service_client = get_supabase_service_client()
+    user_id = _require_user_id(token)
+    _require_owned_meeting(service_client, meeting_id, user_id)
+    updated = (
+        service_client.table("transcript_segments")
+        .update({"text": payload.text})
+        .eq("id", segment_id)
+        .eq("meeting_id", meeting_id)
+        .execute()
+    )
+    if not updated.data:
+        raise HTTPException(status_code=404, detail="Transcript segment was not found.")
+    transcript_revision = _mark_transcript_manually_edited(
+        service_client, meeting_id=meeting_id, owner_id=user_id
+    )
+    return {
+        "segment": updated.data[0],
+        "analysis_stale": True,
+        "transcript_revision": transcript_revision,
     }
 
 
@@ -3391,8 +3509,13 @@ async def assign_transcript_segments(
         .order("segment_index")
         .execute()
     ).data or []
+    transcript_revision = _mark_transcript_manually_edited(
+        service_client, meeting_id=meeting_id, owner_id=user_id
+    )
     return {
         "participant": participant,
         "segments": updated_segments,
         "updated_segment_count": updated_segment_count,
+        "analysis_stale": True,
+        "transcript_revision": transcript_revision,
     }

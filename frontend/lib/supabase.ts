@@ -56,6 +56,8 @@ type Database = {
           summary_translated: string | null;
           brief_translated: string | null;
           analysis_stale: boolean;
+          transcript_revision: number;
+          analysis_revision: number | null;
           detected_language: string | null;
           transcript_language: string | null;
           translation_language: string | null;
@@ -83,6 +85,8 @@ type Database = {
           summary_translated?: string | null;
           brief_translated?: string | null;
           analysis_stale?: boolean;
+          transcript_revision?: number;
+          analysis_revision?: number | null;
           detected_language?: string | null;
           transcript_language?: string | null;
           translation_language?: string | null;
@@ -110,6 +114,8 @@ type Database = {
           summary_translated?: string | null;
           brief_translated?: string | null;
           analysis_stale?: boolean;
+          transcript_revision?: number;
+          analysis_revision?: number | null;
           detected_language?: string | null;
           transcript_language?: string | null;
           translation_language?: string | null;
@@ -229,6 +235,7 @@ type Database = {
           completed_at: string | null;
           retry_count: number;
           worker_version: string | null;
+          transcript_revision: number | null;
           created_at: string;
           updated_at: string;
         };
@@ -242,6 +249,7 @@ type Database = {
           completed_at?: string | null;
           retry_count?: number;
           worker_version?: string | null;
+          transcript_revision?: number | null;
           created_at?: string;
           updated_at?: string;
         };
@@ -255,6 +263,7 @@ type Database = {
           completed_at?: string | null;
           retry_count?: number;
           worker_version?: string | null;
+          transcript_revision?: number | null;
           created_at?: string;
           updated_at?: string;
         };

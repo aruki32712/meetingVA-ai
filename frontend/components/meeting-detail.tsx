@@ -62,6 +62,8 @@ type MeetingDetailRow = {
   summary_translated: string | null;
   brief_translated: string | null;
   analysis_stale: boolean;
+  transcript_revision: number;
+  analysis_revision: number | null;
   detected_language: string | null;
   transcript_language: string | null;
   translation_language: string | null;
@@ -119,6 +121,7 @@ type TranscriptSegmentSplitResponse = {
   segments: TranscriptSegment[];
   participants?: Participant[];
   analysis_stale: boolean;
+  transcript_revision: number;
 };
 
 type TranscriptSegmentAssignmentResponse = {
@@ -323,6 +326,7 @@ function buildProcessingTimeline(
     meeting_created: "Meeting Created",
     audio_uploaded: "Audio Uploaded",
     queued: "Queued",
+    transcript_updated: "Transcript Updated",
     transcription_started: "Transcribing",
     transcription_completed: "Transcript Complete",
     transcription_failed: "Transcription Failed",
@@ -337,7 +341,10 @@ function buildProcessingTimeline(
   );
   const steps = timelineEvents.map((event): TimelineStep => ({
     key: event.id,
-    label: labels[event.event_type],
+    label:
+      event.event_type === "queued" && event.job_type === "analysis"
+        ? "Analysis Queued"
+        : labels[event.event_type],
     description: event.message,
     status: event.status,
     timestamp: event.created_at,
@@ -444,7 +451,7 @@ export function MeetingDetail({ meetingId }: { meetingId: string }) {
     const { data, error: meetingError } = await supabase
       .from("meetings")
       .select(
-        "id,owner_id,title,description,status,scheduled_at,audio_storage_path,duration_seconds,summary,brief,summary_translated,brief_translated,analysis_stale,detected_language,transcript_language,translation_language,translation_status,translate_to_english,transcript_kind,created_at"
+        "id,owner_id,title,description,status,scheduled_at,audio_storage_path,duration_seconds,summary,brief,summary_translated,brief_translated,analysis_stale,transcript_revision,analysis_revision,detected_language,transcript_language,translation_language,translation_status,translate_to_english,transcript_kind,created_at"
       )
       .eq("id", meetingId)
       .eq("owner_id", userData.user.id)
@@ -1063,10 +1070,10 @@ export function MeetingDetail({ meetingId }: { meetingId: string }) {
     );
   }
 
-  const generateAnalysis = useCallback(async () => {
+  const generateAnalysis = useCallback(async (afterTranscriptEdit = false) => {
     if (
       analysisRequestInFlight.current ||
-      analysisJobBlocksRequest(
+      !afterTranscriptEdit && analysisJobBlocksRequest(
         analysisJob?.status,
         Boolean(meeting?.summary || meeting?.brief)
       )
@@ -1111,9 +1118,11 @@ export function MeetingDetail({ meetingId }: { meetingId: string }) {
       }
     } catch (analyzeError) {
       setAnalysisError(
-        analyzeError instanceof Error
-          ? analyzeError.message
-          : "Unable to generate analysis."
+        afterTranscriptEdit
+          ? "Transcript saved, but analysis could not be refreshed"
+          : analyzeError instanceof Error
+            ? analyzeError.message
+            : "Unable to generate analysis."
       );
     } finally {
       setActiveJobId("");
@@ -1174,6 +1183,7 @@ export function MeetingDetail({ meetingId }: { meetingId: string }) {
       }
 
       await refreshMeetingData();
+      void generateAnalysis(true);
     } catch (renameError) {
       setSpeakerError(
         renameError instanceof Error
@@ -1218,6 +1228,7 @@ export function MeetingDetail({ meetingId }: { meetingId: string }) {
       }
 
       await refreshMeetingData();
+      void generateAnalysis(true);
       setMergeTargets((current) => {
         const next = { ...current };
         delete next[participantId];
@@ -1294,6 +1305,7 @@ export function MeetingDetail({ meetingId }: { meetingId: string }) {
       }));
       setSegmentNewSpeakerNames((current) => ({ ...current, [segmentId]: "" }));
       await refreshMeetingData();
+      void generateAnalysis(true);
     } catch (assignError) {
       setSpeakerError(
         assignError instanceof Error
@@ -1356,6 +1368,7 @@ export function MeetingDetail({ meetingId }: { meetingId: string }) {
       setSplitSegmentIds(new Set());
       setSplitDisplayName("");
       await refreshMeetingData();
+      void generateAnalysis(true);
     } catch (splitError) {
       setSpeakerError(
         splitError instanceof Error ? splitError.message : "Unable to split speaker."
@@ -1393,6 +1406,7 @@ export function MeetingDetail({ meetingId }: { meetingId: string }) {
       }
       setSplitUndo(null);
       await refreshMeetingData();
+      void generateAnalysis(true);
     } catch (undoError) {
       setSpeakerError(
         undoError instanceof Error
@@ -1514,6 +1528,7 @@ export function MeetingDetail({ meetingId }: { meetingId: string }) {
       console.log("[split] success branch entered");
 
       let firstCreatedSegmentId = "";
+      let transcriptReadyForAnalysis = false;
       const needsSecondaryRefresh =
         !returnedPayload ||
         segmentSplitAssignments.some((assignment) => assignment.displayName.trim()) &&
@@ -1555,6 +1570,7 @@ export function MeetingDetail({ meetingId }: { meetingId: string }) {
           });
         }
         firstCreatedSegmentId = returnedPayload.segments[0]?.id ?? "";
+        transcriptReadyForAnalysis = true;
         console.log("[split] transcript refresh complete", {
           source: "split response",
           returnedNewSegmentIds: returnedPayload.segments.map((item) => item.id)
@@ -1593,6 +1609,7 @@ export function MeetingDetail({ meetingId }: { meetingId: string }) {
             throw new Error("The refreshed transcript is not available yet.");
           }
           firstCreatedSegmentId = replacementSegments[0]?.id ?? firstCreatedSegmentId;
+          transcriptReadyForAnalysis = true;
           console.log("[split] transcript refresh complete", {
             source: "supabase refetch",
             returnedNewSegmentIds: replacementSegments.map((item) => item.id)
@@ -1610,6 +1627,10 @@ export function MeetingDetail({ meetingId }: { meetingId: string }) {
             });
           }
         }
+      }
+
+      if (transcriptReadyForAnalysis) {
+        void generateAnalysis(true);
       }
 
       requestAnimationFrame(() => {
@@ -1963,7 +1984,7 @@ export function MeetingDetail({ meetingId }: { meetingId: string }) {
                       onClick={
                         step.retryType === "transcription"
                           ? generateTranscript
-                          : generateAnalysis
+                          : () => void generateAnalysis(meeting.analysis_stale)
                       }
                       disabled={isProcessingActive || isTranscribing || isAnalyzing}
                     >
@@ -1990,18 +2011,20 @@ export function MeetingDetail({ meetingId }: { meetingId: string }) {
               Meeting Intelligence
             </h3>
             <p className="mt-1 text-sm text-slate-600">
-              {isMeetingAnalyzing
-                ? "Analysis is queued or processing."
+              {isMeetingAnalyzing && meeting.analysis_stale
+                ? "Updating analysis..."
+                : isMeetingAnalyzing
+                  ? "Analysis is queued or processing."
                 : meeting.status === "completed"
                   ? "AI-generated summary and structured meeting records."
                   : "Generate analysis after the transcript is ready."}
             </p>
           </div>
-          {!hasCompletedAnalysis ? (
+          {!hasCompletedAnalysis || meeting.analysis_stale ? (
             <button
               className="rounded-md bg-ink px-4 py-2 text-sm font-medium text-white transition hover:bg-slate-700 disabled:cursor-not-allowed disabled:bg-slate-300"
               type="button"
-              onClick={generateAnalysis}
+              onClick={() => void generateAnalysis(meeting.analysis_stale)}
               disabled={isMeetingAnalyzing || !canAnalyze}
             >
               {analysisButtonLabel}

@@ -151,6 +151,25 @@ test("production split requests never fall back to browser localhost", () => {
   assert.match(source, /\[split\] closing editor/);
 });
 
+test("successful manual transcript edits queue analysis without retranscribing", () => {
+  const source = readFileSync(
+    new URL("../components/meeting-detail.tsx", import.meta.url),
+    "utf8"
+  );
+  const splitHandler = source.slice(
+    source.indexOf("async function saveSegmentSplit"),
+    source.indexOf("if (isLoading)")
+  );
+
+  assert.match(splitHandler, /transcriptReadyForAnalysis/);
+  assert.match(splitHandler, /generateAnalysis\(true\)/);
+  assert.doesNotMatch(splitHandler, /\/transcribe/);
+  assert.match(source, /Updating analysis\.\.\./);
+  assert.match(source, /Transcript saved, but analysis could not be refreshed/);
+  assert.match(source, /transcript_updated: "Transcript Updated"/);
+  assert.match(source, /"Analysis Queued"/);
+});
+
 test("every transcript row exposes Change Speaker and Split Segment", () => {
   const source = readFileSync(
     new URL("../components/meeting-detail.tsx", import.meta.url),

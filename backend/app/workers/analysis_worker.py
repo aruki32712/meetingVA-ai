@@ -27,6 +27,7 @@ def analyze_meeting_task(
     *,
     meeting_id: str,
     processing_job_id: str | None = None,
+    transcript_revision: int | None = None,
 ) -> dict[str, Any]:
     job_id = processing_job_id or self.request.id
     service_client = get_supabase_service_client()
@@ -54,6 +55,7 @@ def analyze_meeting_task(
             _run_analyze_meeting_job(
                 meeting_id=meeting_id,
                 job_id=job_id,
+                transcript_revision=transcript_revision,
             )
         )
     except Exception as exc:

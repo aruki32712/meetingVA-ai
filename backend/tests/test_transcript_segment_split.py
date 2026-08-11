@@ -60,6 +60,7 @@ class RpcQuery:
                 ],
                 "participants": [],
                 "analysis_stale": True,
+                "transcript_revision": 2,
             }
         )
 
@@ -121,7 +122,7 @@ def test_split_segment_into_two_existing_speakers(monkeypatch):
         )
     )
 
-    assert client.rpc_name == "split_transcript_segment"
+    assert client.rpc_name == "split_transcript_segment_revisioned"
     assert client.rpc_params["p_owner_id"] == "owner"
     assert [part["participant_id"] for part in client.rpc_params["p_parts"]] == [
         SPEAKER_ONE,
@@ -132,6 +133,7 @@ def test_split_segment_into_two_existing_speakers(monkeypatch):
         "Yes, I can handle that.",
     ]
     assert response["analysis_stale"] is True
+    assert response["transcript_revision"] == 2
     assert response["meeting_id"] == MEETING_ID
     assert response["original_segment_id"] == SEGMENT_ID
     assert [segment["segment_index"] for segment in response["segments"]] == [4, 5]
