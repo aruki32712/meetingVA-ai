@@ -51,16 +51,6 @@ app = FastAPI(
     description="Initial MeetingVA AI API scaffold.",
 )
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=CORS_ALLOWED_ORIGINS,
-    allow_origin_regex=CORS_ORIGIN_REGEX,
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
-
 @app.middleware("http")
 async def add_security_headers(request: Request, call_next: Any) -> Response:
     response = await call_next(request)
@@ -3519,3 +3509,17 @@ async def assign_transcript_segments(
         "analysis_stale": True,
         "transcript_revision": transcript_revision,
     }
+
+
+# CORSMiddleware intentionally wraps the fully constructed FastAPI application,
+# including Starlette's error middleware. This keeps CORS headers on sanitized
+# 500 responses as well as normal and HTTPException responses.
+fastapi_app = app
+app = CORSMiddleware(
+    app=fastapi_app,
+    allow_origins=CORS_ALLOWED_ORIGINS,
+    allow_origin_regex=CORS_ORIGIN_REGEX,
+    allow_credentials=True,
+    allow_methods=["GET", "POST", "PATCH", "PUT", "DELETE", "OPTIONS"],
+    allow_headers=["Authorization", "Content-Type"],
+)
